@@ -1,0 +1,19 @@
+# Environment & secrets — never commit
+.env
+secrets/
+
+# Production database dump (45 MB, contains real data & user credentials).
+# Replace with a sanitized schema-only seed before tracking anything here.
+db/init/*.sql
+db/init/*.sql.gz
+
+# Cerner source extracts — internal org data, loaded at import time
+public/mr_data/
+
+# Runtime artifacts written by the app
+public/error_log
+public/import_sql_log.txt
+public/import_sql_log_ajax.txt
+
+# OS noise
+.DS_Store

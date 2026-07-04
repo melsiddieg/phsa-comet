@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  db:
+    image: mysql:8.4
+    container_name: comet_db
+    restart: unless-stopped
+    # File-based secrets keep passwords out of env vars (_FILE variants are supported) :contentReference[oaicite:1]{index=1}
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/db_root_pw
+      MYSQL_PASSWORD_FILE: /run/secrets/comet_app_pw
+      MYSQL_ROOT_HOST: "%"
+    command: --skip-log-bin                       # faster bulk load :contentReference[oaicite:2]{index=2}
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./db/init:/docker-entrypoint-initdb.d:ro  # *.sql or *.sql.gz processed once :contentReference[oaicite:3]{index=3}
+      - ./db/conf.d:/etc/mysql/conf.d:ro
+    healthcheck:
+      test: ["CMD-SHELL","mysqladmin ping -uroot -p$$(cat /run/secrets/db_root_pw) --silent"]
+      interval: 10s
+      retries: 20                                 # all other services wait :contentReference[oaicite:4]{index=4}
+    secrets: [db_root_pw, comet_app_pw]
+    networks: [comet_net]
+
+  app:
+    build:
+      context: .                     # project root so src/ is visible
+      dockerfile: docker/php/Dockerfile
+    container_name: comet_app
+    env_file: .env
+    volumes:
+      - ./public:/var/www/html  # Public entry-point files :contentReference[oaicite:5]{index=5}
+    depends_on:
+      - db                            # simple ordering without condition :contentReference[oaicite:6]{index=6}
+    secrets: [comet_app_pw]
+    networks: [comet_net]
+
+  web:
+    image: docker.io/nginx:1.25-alpine
+    container_name: comet_web
+    ports:
+      - "8080:80"
+    volumes:
+      - ./public:/var/www/html  # proper document root :contentReference[oaicite:8]{index=8}
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+    networks: [comet_net]
+secrets:           # never checked into Git :contentReference[oaicite:5]{index=5}
+  db_root_pw:
+    file: ./secrets/db_root_pw.txt
+  comet_app_pw:
+    file: ./secrets/comet_app_pw.txt
+
+volumes:
+  db_data: {}
+
+networks:
+  comet_net:
+    driver: bridge
+
