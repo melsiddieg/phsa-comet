@@ -49,6 +49,7 @@
                     <div style="border:1px solid #ddd; border-radius:6px; padding:0.5rem; margin-bottom:0.5rem; background:#fff;">
                         <b>{{ $map->target_concept_name }}</b>
                         <span style="color:#888;">({{ $map->targetConcept?->concept_code ?? $map->target_concept_id }}, {{ $map->target_vocabulary_id }})</span>
+                        @if ($map->equivalence)<span style="font-size:0.7rem; background:#eef; padding:0 0.3rem; border-radius:3px;">{{ $map->equivalence }}</span>@endif
                         @can('map')
                             <div style="margin-top:0.4rem; display:flex; gap:0.4rem; flex-wrap:wrap;">
                                 <input type="text" id="upd-code-{{ $map->id }}" value="{{ $map->targetConcept?->concept_code }}" size="14">
@@ -75,6 +76,14 @@
                         <input type="text" wire:model="newCode" placeholder="Concept code" size="16">
                         <select wire:model="newVocabulary">
                             @foreach ($sheetVocabs as $v)<option value="{{ $v }}">{{ $v }}</option>@endforeach
+                        </select>
+                        <select wire:model="newEquivalence" title="Mapping equivalence">
+                            <option value="">equivalence…</option>
+                            <option value="EQUAL">EQUAL</option>
+                            <option value="EQUIVALENT">EQUIVALENT</option>
+                            <option value="WIDER">WIDER</option>
+                            <option value="NARROWER">NARROWER</option>
+                            <option value="INEXACT">INEXACT</option>
                         </select>
                         <button type="button" wire:click="addMap">Add</button>
                     </div>

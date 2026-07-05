@@ -25,6 +25,7 @@ class TermEditor extends Component
     // Add-map form
     public string $newCode = '';
     public string $newVocabulary = '';
+    public string $newEquivalence = ''; // EQUAL|EQUIVALENT|WIDER|NARROWER|INEXACT|'' (unspecified)
 
     // Concept search panel
     public string $searchQuery = '';
@@ -98,6 +99,7 @@ class TermEditor extends Component
             'target_concept_id' => $concept->concept_id,
             'target_concept_name' => $concept->concept_name,
             'target_vocabulary_id' => $vocabulary,
+            'equivalence' => $this->newEquivalence ?: null,
             'created_by' => auth()->user()->name,
         ]);
         app(MapAuditor::class)->logMapChange('Add', $map, auth()->user()->name);

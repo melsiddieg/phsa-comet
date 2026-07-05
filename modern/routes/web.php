@@ -10,6 +10,7 @@ use App\Livewire\ReviewQueue;
 use App\Livewire\VocabImpactReport;
 use App\Livewire\UserAdmin;
 use App\Livewire\MappingGrid;
+use App\Livewire\MappingMode;
 use Illuminate\Support\Facades\Route;
 
 // ── Auth ────────────────────────────────────────────────────────────
@@ -31,6 +32,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/domains', [SheetController::class, 'domainIndex'])->name('domains.index');
     Route::get('/concepts', ConceptBrowser::class)->name('concepts');
     Route::get('/sheets/{sheet}', MappingGrid::class)->name('sheets.show');
+    Route::get('/sheets/{sheet}/map', MappingMode::class)->name('sheets.map');
     Route::get('/import', ImportManager::class)->name('import');
     Route::get('/review', ReviewQueue::class)->name('review');
     Route::get('/vocab-impact', VocabImpactReport::class)->name('vocab.impact');
@@ -39,6 +41,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/export/stcm/{release}', [ExportController::class, 'stcm'])->name('export.stcm.release')->whereNumber('release');
     Route::get('/export/exclusions', [ExportController::class, 'exclusions'])->name('export.exclusions');
     Route::get('/export/sdo', [ExportController::class, 'sdoSubmissions'])->name('export.sdo');
+    Route::get('/export/usagi', [ExportController::class, 'usagi'])->name('export.usagi');
 
     Route::get('/admin/releases', ReleasesAdmin::class)->name('admin.releases');
     Route::get('/admin/users', UserAdmin::class)->name('admin.users');

@@ -9,6 +9,7 @@
         <a href="{{ route('sheets.index') }}" style="color:#000080;">&larr; Cerner Areas</a>
         <h1 style="color: var(--comet-gold); margin:0;">{{ $sheet->name }}</h1>
         <span style="color:#777; font-size:0.85rem;">{{ number_format($terms->total()) }} terms</span>
+        @can('map')<a href="{{ route('sheets.map', $sheet->id) }}" style="color:#fff; background:var(--comet-brown); padding:0.3rem 0.7rem; border-radius:4px; text-decoration:none;">⚡ Mapping mode</a>@endcan
     </div>
 
     {{-- Filters --}}

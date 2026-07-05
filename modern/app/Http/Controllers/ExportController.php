@@ -21,4 +21,9 @@ class ExportController extends Controller
     {
         return $exporter->streamSdoSubmissions();
     }
+
+    public function usagi(MapExporter $exporter): StreamedResponse
+    {
+        return $exporter->streamUsagi();
+    }
 }

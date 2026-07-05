@@ -99,6 +99,38 @@ class MapExporter
         });
     }
 
+    /**
+     * Usagi-style interchange export: richer than STCM — carries equivalence
+     * and the domain/class of the target, for round-tripping with reviewers or
+     * other OHDSI tooling. Live maps only.
+     */
+    public function streamUsagi(): StreamedResponse
+    {
+        return $this->stream('Usagi_maps_'.now()->format('Ymd').'.csv', function ($out) {
+            fputcsv($out, [
+                'source_code', 'source_vocabulary_id', 'source_code_description',
+                'target_concept_id', 'target_concept_name', 'target_vocabulary_id',
+                'target_domain_id', 'equivalence', 'created_by',
+            ]);
+
+            DB::table('maps as m')
+                ->leftJoin('source_term_codes as sc', fn ($j) => $j->on('sc.source_term_id', '=', 'm.source_term_id')->where('sc.spot', 1))
+                ->leftJoin('concepts as c', 'c.concept_id', '=', 'm.target_concept_id')
+                ->orderBy('m.id')
+                ->selectRaw("
+                    coalesce(sc.code, m.source_code) as source_code,
+                    m.source_vocabulary_id, coalesce(sc.description, m.source_code_description) as source_code_description,
+                    m.target_concept_id, m.target_concept_name, m.target_vocabulary_id,
+                    c.domain_id as target_domain_id, m.equivalence, m.created_by")
+                ->lazy()
+                ->each(fn ($r) => fputcsv($out, [
+                    $r->source_code, $r->source_vocabulary_id, $r->source_code_description,
+                    $r->target_concept_id, $r->target_concept_name, $r->target_vocabulary_id,
+                    $r->target_domain_id, $r->equivalence, $r->created_by,
+                ]));
+        });
+    }
+
     /** Live maps as STCM rows (linked term codes + unlinked snapshots). */
     private function liveRows()
     {

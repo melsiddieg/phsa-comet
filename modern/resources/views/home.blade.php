@@ -19,7 +19,7 @@
         @can('review')
             <li><a href="{{ route('review') }}" style="color:#000080; font-weight:600;">Review Mapping Changes</a> · <a href="{{ route('vocab.impact') }}" style="color:#000080;">Vocabulary Impact Report</a></li>
         @endcan
-        <li><a href="{{ route('export.stcm') }}" style="color:#000080; font-weight:600;">Export Maps (STCM)</a> · <a href="{{ route('export.exclusions') }}" style="color:#000080;">Exclusions</a> · <a href="{{ route('export.sdo') }}" style="color:#000080;">SDO Submissions</a></li>
+        <li><a href="{{ route('export.stcm') }}" style="color:#000080; font-weight:600;">Export Maps (STCM)</a> · <a href="{{ route('export.exclusions') }}" style="color:#000080;">Exclusions</a> · <a href="{{ route('export.sdo') }}" style="color:#000080;">SDO Submissions</a> · <a href="{{ route('export.usagi') }}" style="color:#000080;">Usagi</a></li>
         @can('import')
             <li><a href="{{ route('import') }}" style="color:#000080; font-weight:600;">Import MappingReport</a></li>
         @endcan
