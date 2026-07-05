@@ -14,6 +14,8 @@ class Sheet extends Model
     protected $table = 'sheets';
     protected $guarded = [];
 
+    protected $casts = ['last_import_at' => 'datetime'];
+
     public function sourceColumns() { return $this->hasMany(SheetSourceColumn::class)->orderBy('spot'); }
     public function sheetAttributes() { return $this->hasMany(SheetAttribute::class)->orderBy('col_position'); }
     public function vocabularyNames() { return $this->hasMany(SheetVocabulary::class); }

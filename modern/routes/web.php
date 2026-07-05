@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\SheetController;
+use App\Livewire\ImportManager;
 use App\Livewire\MappingGrid;
 use Illuminate\Support\Facades\Route;
 
@@ -23,4 +24,5 @@ Route::middleware('auth')->group(function () {
     Route::get('/sheets', [SheetController::class, 'sourceIndex'])->name('sheets.index');
     Route::get('/domains', [SheetController::class, 'domainIndex'])->name('domains.index');
     Route::get('/sheets/{sheet}', MappingGrid::class)->name('sheets.show');
+    Route::get('/import', ImportManager::class)->name('import');
 });
