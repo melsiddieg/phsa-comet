@@ -48,4 +48,19 @@ class ProgressSummaryTest extends TestCase
             ->assertSee('Mapping progress')
             ->assertSee('Welcome to COMET');
     }
+
+    public function test_home_page_shows_modernization_milestones(): void
+    {
+        $done = collect(config('comet.milestones'))->where('status', 'done')->count();
+        $total = count(config('comet.milestones'));
+
+        $user = User::factory()->create(['enabled' => true, 'is_mapper' => true]);
+
+        $this->actingAs($user)->get('/')
+            ->assertOk()
+            ->assertSee('Modernization status')
+            ->assertSee("$done / $total milestones complete")
+            ->assertSee('M0')
+            ->assertSee('M7');
+    }
 }

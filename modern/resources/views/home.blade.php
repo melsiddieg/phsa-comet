@@ -5,22 +5,26 @@
     <livewire:progress-summary />
 </div>
 
+<div class="card" style="margin-bottom:1.25rem;">
+    @include('partials.milestones')
+</div>
+
 <div class="card">
     <h1 style="color: var(--comet-gold);"><i>Welcome to COMET</i></h1>
     <p>Signed in as <b>{{ auth()->user()->name }}</b> ({{ auth()->user()->email }})</p>
 
-    <ul style="line-height: 2.2; list-style: none; padding: 0; max-width: 420px;">
+    <ul style="line-height: 2.2; list-style: none; padding: 0; max-width: 460px;">
         <li><a href="{{ route('sheets.index') }}" style="color:#000080; font-weight:600;">Source Terms by Cerner Area</a></li>
         <li><a href="{{ route('domains.index') }}" style="color:#000080; font-weight:600;">Mapped Terms by OMOP Domain</a></li>
         @can('review')
-            <li style="color:#999;">Review Mapping Changes · Vocabulary Impact Report <em>(M5 / M7)</em></li>
+            <li><a href="{{ route('review') }}" style="color:#000080; font-weight:600;">Review Mapping Changes</a> · <a href="{{ route('vocab.impact') }}" style="color:#000080;">Vocabulary Impact Report</a></li>
         @endcan
-        <li style="color:#999;">Exports <em>(M6)</em></li>
+        <li><a href="{{ route('export.stcm') }}" style="color:#000080; font-weight:600;">Export Maps (STCM)</a> · <a href="{{ route('export.exclusions') }}" style="color:#000080;">Exclusions</a></li>
         @can('import')
-            <li style="color:#999;">Import MappingReport <em>(M4)</em></li>
+            <li><a href="{{ route('import') }}" style="color:#000080; font-weight:600;">Import MappingReport</a></li>
         @endcan
         @can('admin')
-            <li style="color:#999;">Map Releases · User Administration <em>(M6)</em></li>
+            <li><a href="{{ route('admin.releases') }}" style="color:#000080; font-weight:600;">Map Releases</a> · <a href="{{ route('admin.users') }}" style="color:#000080;">User Administration</a></li>
         @endcan
     </ul>
 

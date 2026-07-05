@@ -6,4 +6,17 @@ return [
 
     // Directory (as seen by the Postgres container) holding Athena downloads.
     'vocab_data_path' => env('VOCAB_DATA_PATH', '/vocab_data'),
+
+    // Modernization milestones shown on the welcome screen. Status is one of
+    // 'done' | 'in_progress' | 'planned'. Update as the rebuild progresses.
+    'milestones' => [
+        ['id' => 'M0', 'title' => 'Skeleton, Docker stack, SSO & RBAC', 'status' => 'done'],
+        ['id' => 'M1', 'title' => 'Postgres schema, models, legacy migration, vocab loader', 'status' => 'done'],
+        ['id' => 'M2', 'title' => 'Read paths — dashboards, mapping grid, domain views', 'status' => 'done'],
+        ['id' => 'M3', 'title' => 'Mapping editor — concept search, guardrails, propagation, audit', 'status' => 'done'],
+        ['id' => 'M4', 'title' => 'MappingReport import — queued job with run audit', 'status' => 'done'],
+        ['id' => 'M5', 'title' => 'Review & approval workflow with snapshots', 'status' => 'done'],
+        ['id' => 'M6', 'title' => 'Exports (STCM/exclusions), releases & user admin', 'status' => 'done'],
+        ['id' => 'M7', 'title' => 'Vocabulary impact report & cutover parity', 'status' => 'done'],
+    ],
 ];
