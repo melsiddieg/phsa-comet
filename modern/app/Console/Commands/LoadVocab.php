@@ -35,11 +35,12 @@ class LoadVocab extends Command
         $dir = rtrim($this->argument('dir'), '/');
 
         $this->info("Creating staging tables...");
-        DB::statement('DROP TABLE IF EXISTS concepts_stg, concept_synonyms_stg, concept_relationships_stg, vocabularies_stg');
+        DB::statement('DROP TABLE IF EXISTS concepts_stg, concept_synonyms_stg, concept_relationships_stg, vocabularies_stg, concept_ancestors_stg');
         DB::statement('CREATE TABLE concepts_stg (LIKE concepts INCLUDING DEFAULTS)');
         DB::statement('CREATE TABLE concept_synonyms_stg (LIKE concept_synonyms INCLUDING DEFAULTS)');
         DB::statement('CREATE TABLE concept_relationships_stg (LIKE concept_relationships INCLUDING DEFAULTS)');
         DB::statement('CREATE TABLE vocabularies_stg (LIKE vocabularies INCLUDING DEFAULTS)');
+        DB::statement('CREATE TABLE concept_ancestors_stg (LIKE concept_ancestors INCLUDING DEFAULTS)');
 
         // Athena files are tab-delimited with a header and no quoting; the
         // \x01 QUOTE trick keeps embedded double-quotes literal.
@@ -56,6 +57,20 @@ class LoadVocab extends Command
             $this->line('The path must exist inside the Postgres container (/vocab_data/... or /fixtures/...).');
 
             return self::FAILURE;
+        }
+
+        // Optional CONCEPT_ANCESTOR (hierarchy browsing). If absent, the existing
+        // ancestors table is left untouched rather than emptied.
+        $ancestorsLoaded = false;
+        try {
+            DB::statement("COPY concept_ancestors_stg (ancestor_concept_id, descendant_concept_id, min_levels_of_separation, max_levels_of_separation) FROM '$dir/CONCEPT_ANCESTOR.csv' $copyOpts");
+            $ancestorsLoaded = true;
+            $this->line('  ancestors      '.DB::table('concept_ancestors_stg')->count().' rows');
+        } catch (\Throwable $e) {
+            if (! str_contains($e->getMessage(), 'could not open file') && ! str_contains($e->getMessage(), 'No such file')) {
+                throw $e;
+            }
+            $this->line('  (no CONCEPT_ANCESTOR.csv - keeping existing hierarchy table)');
         }
 
         // Optional custom extensions (e.g. Canadian ICD-10-CA / CCI / SNOMED CT-CA)
@@ -105,6 +120,14 @@ class LoadVocab extends Command
         DB::statement('CREATE INDEX c_stg_trgm ON concepts_stg USING gin (lower(concept_name) gin_trgm_ops)');
         DB::statement('CREATE INDEX s_stg_cid ON concept_synonyms_stg (concept_id)');
         DB::statement('CREATE INDEX s_stg_trgm ON concept_synonyms_stg USING gin (lower(concept_synonym_name) gin_trgm_ops)');
+        DB::statement('CREATE INDEX c_stg_utrgm ON concepts_stg USING gin (lower(f_unaccent(concept_name)) gin_trgm_ops)');
+        DB::statement("CREATE INDEX c_stg_tsv ON concepts_stg USING gin (to_tsvector('simple', f_unaccent(concept_name)))");
+        DB::statement('CREATE INDEX s_stg_utrgm ON concept_synonyms_stg USING gin (lower(f_unaccent(concept_synonym_name)) gin_trgm_ops)');
+        DB::statement("CREATE INDEX s_stg_tsv ON concept_synonyms_stg USING gin (to_tsvector('simple', f_unaccent(concept_synonym_name)))");
+        if ($ancestorsLoaded) {
+            DB::statement('ALTER TABLE concept_ancestors_stg ADD PRIMARY KEY (ancestor_concept_id, descendant_concept_id)');
+            DB::statement('CREATE INDEX a_stg_desc ON concept_ancestors_stg (descendant_concept_id)');
+        }
         DB::statement('ALTER TABLE concept_relationships_stg ADD PRIMARY KEY (concept_id_1, concept_id_2, relationship_id)');
         DB::statement('ALTER TABLE vocabularies_stg ADD PRIMARY KEY (vocabulary_id)');
 
@@ -112,7 +135,7 @@ class LoadVocab extends Command
             ?: 'unknown ('.now()->toDateString().')';
 
         $this->info("Swapping in (release: $release)...");
-        DB::transaction(function () {
+        DB::transaction(function () use ($ancestorsLoaded) {
             DB::statement('DROP TABLE concepts, concept_synonyms, concept_relationships, vocabularies');
             DB::statement('ALTER TABLE concepts_stg RENAME TO concepts');
             DB::statement('ALTER TABLE concept_synonyms_stg RENAME TO concept_synonyms');
@@ -125,6 +148,17 @@ class LoadVocab extends Command
             DB::statement('ALTER INDEX c_stg_trgm RENAME TO concepts_name_trgm');
             DB::statement('ALTER INDEX s_stg_cid RENAME TO concept_synonyms_cid_idx');
             DB::statement('ALTER INDEX s_stg_trgm RENAME TO concept_synonyms_name_trgm');
+            DB::statement('ALTER INDEX c_stg_utrgm RENAME TO concepts_name_unaccent_trgm');
+            DB::statement('ALTER INDEX c_stg_tsv RENAME TO concepts_name_tsv');
+            DB::statement('ALTER INDEX s_stg_utrgm RENAME TO concept_synonyms_name_unaccent_trgm');
+            DB::statement('ALTER INDEX s_stg_tsv RENAME TO concept_synonyms_name_tsv');
+            if ($ancestorsLoaded) {
+                DB::statement('DROP TABLE concept_ancestors');
+                DB::statement('ALTER TABLE concept_ancestors_stg RENAME TO concept_ancestors');
+                DB::statement('ALTER INDEX a_stg_desc RENAME TO concept_ancestors_desc_idx');
+            } else {
+                DB::statement('DROP TABLE IF EXISTS concept_ancestors_stg');
+            }
         });
 
         DB::table('vocab_meta')->insert([

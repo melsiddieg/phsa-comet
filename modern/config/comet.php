@@ -7,6 +7,13 @@ return [
     // Directory (as seen by the Postgres container) holding Athena downloads.
     'vocab_data_path' => env('VOCAB_DATA_PATH', '/vocab_data'),
 
+    // Hybrid concept-search tuning (see App\Services\ConceptSearch).
+    'search' => [
+        'trigram_threshold' => (float) env('SEARCH_TRIGRAM_THRESHOLD', 0.25),
+        'tsrank_scale' => (float) env('SEARCH_TSRANK_SCALE', 4.0),
+        'tsrank_cap' => (float) env('SEARCH_TSRANK_CAP', 0.95),
+    ],
+
     // Modernization milestones shown on the welcome screen. Status is one of
     // 'done' | 'in_progress' | 'planned'. Update as the rebuild progresses.
     'milestones' => [

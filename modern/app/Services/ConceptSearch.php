@@ -6,20 +6,24 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Usagi-style concept search over names + synonyms.
+ * Hybrid ranked concept search over names + synonyms (Usagi-style, lexical).
  *
- * On Postgres this uses pg_trgm similarity (GIN-indexed); on other drivers
- * (SQLite in tests) it falls back to LIKE matching with a crude score so the
- * surrounding filter logic stays testable.
+ * Postgres path blends three signals, accent-insensitively (f_unaccent):
+ *   1. exact concept_code match          -> score 1000 (always first)
+ *   2. whole-string trigram similarity   -> good for short/typo'd terms
+ *   3. tsvector token coverage (ts_rank, 'simple' config, websearch syntax)
+ *      -> catches long clinical phrases where trigram similarity collapses
+ * Final score = max(trigram, ts_rank * tsrank_scale); ties broken by how
+ * often the team already maps to the concept (usage boost, ordering only).
+ *
+ * On other drivers (SQLite in tests) a LIKE fallback keeps the filter logic
+ * testable. Tunables live in config('comet.search').
  */
 class ConceptSearch
 {
     /**
      * @param  list<string>  $vocabularies  empty = no vocabulary filter
-     * @return Collection<int, object{concept_id:int, concept_name:string, concept_code:string,
-     *                                domain_id:string, vocabulary_id:string, concept_class_id:string,
-     *                                standard_concept:?string, invalid_reason:?string,
-     *                                score:float, matched_on:string, synonym_name:?string}>
+     * @return Collection<int, object>
      */
     public function search(
         string $query,
@@ -52,7 +56,9 @@ class ConceptSearch
             $this->likeSearch($results, $query, $vocabularies, $domain, $standardOnly, $validOnly, $limit);
         }
 
-        return $results->sortByDesc('score')->take($limit)->values();
+        $ranked = $results->sortByDesc('score')->take($limit)->values();
+
+        return $this->applyUsageOrdering($ranked);
     }
 
     private function applyFilters($builder, array $vocabularies, string $domain, bool $standardOnly, bool $validOnly): void
@@ -73,31 +79,51 @@ class ConceptSearch
 
     private function pgSearch(Collection $results, string $q, array $vocabularies, string $domain, bool $standardOnly, bool $validOnly, int $limit): void
     {
-        $needle = strtolower($q);
+        $needle = mb_strtolower($q);
+        $threshold = (float) config('comet.search.trigram_threshold', 0.25);
+        $tsScale = (float) config('comet.search.tsrank_scale', 4.0);
+        $tsCap = (float) config('comet.search.tsrank_cap', 0.95);
 
-        // Names
+        // ── Signal 2: accent-insensitive whole-string trigram ──
         $names = DB::table('concepts')
-            ->selectRaw('*, similarity(lower(concept_name), ?) as score', [$needle])
-            ->whereRaw('lower(concept_name) % ?', [$needle]);
+            ->selectRaw('*, similarity(lower(f_unaccent(concept_name)), lower(f_unaccent(?))) as sim', [$needle])
+            ->whereRaw('similarity(lower(f_unaccent(concept_name)), lower(f_unaccent(?))) >= ?', [$needle, $threshold]);
         $this->applyFilters($names, $vocabularies, $domain, $standardOnly, $validOnly);
-        foreach ($names->orderByDesc('score')->limit($limit)->get() as $row) {
-            $this->merge($results, $row, (float) $row->score, 'name');
+        foreach ($names->orderByDesc('sim')->limit($limit)->get() as $row) {
+            $this->merge($results, $row, (float) $row->sim, 'name');
         }
 
-        // Synonyms
         $syns = DB::table('concept_synonyms as s')
             ->join('concepts as c', 'c.concept_id', '=', 's.concept_id')
-            ->selectRaw('c.*, s.concept_synonym_name, similarity(lower(s.concept_synonym_name), ?) as score', [$needle])
-            ->whereRaw('lower(s.concept_synonym_name) % ?', [$needle]);
+            ->selectRaw('c.*, s.concept_synonym_name, similarity(lower(f_unaccent(s.concept_synonym_name)), lower(f_unaccent(?))) as sim', [$needle])
+            ->whereRaw('similarity(lower(f_unaccent(s.concept_synonym_name)), lower(f_unaccent(?))) >= ?', [$needle, $threshold]);
         $this->applyFilters($syns, $vocabularies, $domain, $standardOnly, $validOnly);
-        foreach ($syns->orderByDesc('score')->limit($limit)->get() as $row) {
-            $this->merge($results, $row, (float) $row->score, 'synonym', $row->concept_synonym_name);
+        foreach ($syns->orderByDesc('sim')->limit($limit)->get() as $row) {
+            $this->merge($results, $row, (float) $row->sim, 'synonym', $row->concept_synonym_name);
+        }
+
+        // ── Signal 3: token coverage for long phrases (websearch syntax) ──
+        $tsNames = DB::table('concepts')
+            ->selectRaw("*, ts_rank(to_tsvector('simple', f_unaccent(concept_name)), websearch_to_tsquery('simple', f_unaccent(?))) as tsr", [$needle])
+            ->whereRaw("to_tsvector('simple', f_unaccent(concept_name)) @@ websearch_to_tsquery('simple', f_unaccent(?))", [$needle]);
+        $this->applyFilters($tsNames, $vocabularies, $domain, $standardOnly, $validOnly);
+        foreach ($tsNames->orderByDesc('tsr')->limit($limit)->get() as $row) {
+            $this->merge($results, $row, min($tsCap, (float) $row->tsr * $tsScale), 'tokens');
+        }
+
+        $tsSyns = DB::table('concept_synonyms as s')
+            ->join('concepts as c', 'c.concept_id', '=', 's.concept_id')
+            ->selectRaw("c.*, s.concept_synonym_name, ts_rank(to_tsvector('simple', f_unaccent(s.concept_synonym_name)), websearch_to_tsquery('simple', f_unaccent(?))) as tsr", [$needle])
+            ->whereRaw("to_tsvector('simple', f_unaccent(s.concept_synonym_name)) @@ websearch_to_tsquery('simple', f_unaccent(?))", [$needle]);
+        $this->applyFilters($tsSyns, $vocabularies, $domain, $standardOnly, $validOnly);
+        foreach ($tsSyns->orderByDesc('tsr')->limit($limit)->get() as $row) {
+            $this->merge($results, $row, min($tsCap, (float) $row->tsr * $tsScale), 'tokens', $row->concept_synonym_name);
         }
     }
 
     private function likeSearch(Collection $results, string $q, array $vocabularies, string $domain, bool $standardOnly, bool $validOnly, int $limit): void
     {
-        $needle = '%'.strtolower($q).'%';
+        $needle = '%'.mb_strtolower($q).'%';
 
         $names = DB::table('concepts')->whereRaw('lower(concept_name) like ?', [$needle]);
         $this->applyFilters($names, $vocabularies, $domain, $standardOnly, $validOnly);
@@ -124,7 +150,37 @@ class ConceptSearch
         $row->score = round($score, 3);
         $row->matched_on = $matchedOn;
         $row->synonym_name = $synonym;
-        unset($row->concept_synonym_name);
+        unset($row->concept_synonym_name, $row->sim, $row->tsr);
         $results->put($row->concept_id, $row);
+    }
+
+    /**
+     * Stable usage tie-break: within equal scores, concepts the team already
+     * maps to rank first ("the team maps to this often" prior). Ordering only
+     * — scores are not inflated.
+     *
+     * @param  Collection<int, object>  $ranked
+     * @return Collection<int, object>
+     */
+    private function applyUsageOrdering(Collection $ranked): Collection
+    {
+        if ($ranked->isEmpty()) {
+            return $ranked;
+        }
+
+        $uses = DB::table('maps')
+            ->whereIn('target_concept_id', $ranked->pluck('concept_id')->all())
+            ->selectRaw('target_concept_id, count(*) as uses')
+            ->groupBy('target_concept_id')
+            ->pluck('uses', 'target_concept_id');
+
+        return $ranked
+            ->map(function ($row) use ($uses) {
+                $row->team_uses = (int) ($uses[$row->concept_id] ?? 0);
+
+                return $row;
+            })
+            ->sortBy([['score', 'desc'], ['team_uses', 'desc']])
+            ->values();
     }
 }

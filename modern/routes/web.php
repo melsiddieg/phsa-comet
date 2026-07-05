@@ -3,6 +3,7 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ExportController;
 use App\Http\Controllers\SheetController;
+use App\Livewire\ConceptBrowser;
 use App\Livewire\ImportManager;
 use App\Livewire\ReleasesAdmin;
 use App\Livewire\ReviewQueue;
@@ -28,6 +29,7 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/sheets', [SheetController::class, 'sourceIndex'])->name('sheets.index');
     Route::get('/domains', [SheetController::class, 'domainIndex'])->name('domains.index');
+    Route::get('/concepts', ConceptBrowser::class)->name('concepts');
     Route::get('/sheets/{sheet}', MappingGrid::class)->name('sheets.show');
     Route::get('/import', ImportManager::class)->name('import');
     Route::get('/review', ReviewQueue::class)->name('review');

@@ -161,6 +161,7 @@
                                     <tr style="border-bottom:1px solid #eee;">
                                         <td style="padding:0.2rem;">
                                             @can('map')<button type="button" wire:click="useConcept('{{ $r->concept_code }}', '{{ $r->vocabulary_id }}')">Use</button>@endcan
+                                            <button type="button" wire:click="showDetail({{ $r->concept_id }})" title="Details">🔍</button>
                                         </td>
                                         <td style="padding:0.3rem;">{{ $r->concept_name }}
                                             @if ($r->standard_concept !== 'S' || $r->invalid_reason)<span style="color:#b00020;">⚠</span>@endif
@@ -200,4 +201,8 @@
             </div>
         </div>
     </div>
+
+    @if ($detail)
+        @include('partials.concept-detail', ['detail' => $detail, 'closeAction' => 'closeDetail'])
+    @endif
 </div>

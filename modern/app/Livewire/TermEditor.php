@@ -238,6 +238,18 @@ class TermEditor extends Component
         $this->searchRan = true;
     }
 
+    public int $detailConceptId = 0;
+
+    public function showDetail(int $conceptId): void
+    {
+        $this->detailConceptId = $conceptId;
+    }
+
+    public function closeDetail(): void
+    {
+        $this->detailConceptId = 0;
+    }
+
     public function useConcept(string $code, string $vocabulary): void
     {
         $this->newCode = $code;
@@ -320,7 +332,7 @@ class TermEditor extends Component
             ->get();
     }
 
-    public function render(ConceptSearch $search): View
+    public function render(ConceptSearch $search, \App\Services\ConceptDetail $conceptDetail): View
     {
         $sheetVocabs = $this->term->sheet->vocabularyNames()->orderBy('vocabulary')->pluck('vocabulary');
 
@@ -347,6 +359,7 @@ class TermEditor extends Component
                 ->join('sheet_attributes as sa', 'sa.id', '=', 'a.sheet_attribute_id')
                 ->where('a.source_term_id', $this->term->id)
                 ->orderBy('sa.col_position')->get(['sa.name', 'a.value']),
+            'detail' => $this->detailConceptId ? $conceptDetail->for($this->detailConceptId) : null,
         ]);
     }
 }
