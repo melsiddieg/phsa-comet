@@ -1,6 +1,10 @@
 @extends('layouts.app')
 @section('title', 'COMET — Home')
 @section('content')
+<div class="card" style="margin-bottom:1.25rem;">
+    <livewire:progress-summary />
+</div>
+
 <div class="card">
     <h1 style="color: var(--comet-gold);"><i>Welcome to COMET</i></h1>
     <p>Signed in as <b>{{ auth()->user()->name }}</b> ({{ auth()->user()->email }})</p>
