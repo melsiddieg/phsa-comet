@@ -5,6 +5,7 @@ namespace App\Livewire;
 use App\Models\Sheet;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Facades\DB;
+use Livewire\Attributes\On;
 use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithPagination;
@@ -25,6 +26,8 @@ class MappingGrid extends Component
     #[Url] public string $domain = 'all';
     #[Url] public string $q = '';           // source-description search
 
+    public ?int $editingTermId = null;
+
     public function mount(Sheet $sheet): void
     {
         $this->sheet = $sheet;
@@ -33,6 +36,23 @@ class MappingGrid extends Component
     public function updating(): void
     {
         $this->resetPage();
+    }
+
+    public function openEditor(int $termId): void
+    {
+        $this->editingTermId = $termId;
+    }
+
+    #[On('editor-closed')]
+    public function closeEditor(): void
+    {
+        $this->editingTermId = null;
+    }
+
+    #[On('map-saved')]
+    public function refreshGrid(): void
+    {
+        // re-render (grid queries re-run); keep the editor open
     }
 
     public function clearFilters(): void

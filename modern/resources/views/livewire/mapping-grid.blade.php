@@ -75,6 +75,7 @@
                 @endphp
                 <tr style="background:{{ $bg }}; border-bottom:1px solid #e8e8e8;">
                     <td style="padding:0.4rem; white-space:nowrap;">
+                        <a href="#" wire:click.prevent="openEditor({{ $term->id }})" title="Open editor" style="text-decoration:none; margin-right:0.3rem;">✏️</a>
                         @switch($term->exclude_status)
                             @case('Out of Scope - Exclude') <span title="Excluded">🚫</span> @break
                             @case('Question - Pending') <span title="Question">❓</span> @break
@@ -116,4 +117,8 @@
     <div style="margin-top:1rem;">
         {{ $terms->links() }}
     </div>
+
+    @if ($editingTermId)
+        <livewire:term-editor :term-id="$editingTermId" :key="'editor-'.$editingTermId" />
+    @endif
 </div>

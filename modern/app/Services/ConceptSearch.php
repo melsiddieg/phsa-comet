@@ -1,0 +1,130 @@
+<?php
+
+namespace App\Services;
+
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+
+/**
+ * Usagi-style concept search over names + synonyms.
+ *
+ * On Postgres this uses pg_trgm similarity (GIN-indexed); on other drivers
+ * (SQLite in tests) it falls back to LIKE matching with a crude score so the
+ * surrounding filter logic stays testable.
+ */
+class ConceptSearch
+{
+    /**
+     * @param  list<string>  $vocabularies  empty = no vocabulary filter
+     * @return Collection<int, object{concept_id:int, concept_name:string, concept_code:string,
+     *                                domain_id:string, vocabulary_id:string, concept_class_id:string,
+     *                                standard_concept:?string, invalid_reason:?string,
+     *                                score:float, matched_on:string, synonym_name:?string}>
+     */
+    public function search(
+        string $query,
+        array $vocabularies = [],
+        string $domain = 'all',
+        bool $standardOnly = true,
+        bool $validOnly = true,
+        int $limit = 50,
+    ): Collection {
+        $query = trim($query);
+        if ($query === '') {
+            return collect();
+        }
+
+        $results = collect();
+
+        // 1) Exact concept_code match always ranks first.
+        $exact = DB::table('concepts')->where('concept_code', $query);
+        $this->applyFilters($exact, $vocabularies, $domain, $standardOnly, $validOnly);
+        foreach ($exact->limit(5)->get() as $row) {
+            $row->score = 1000.0;
+            $row->matched_on = 'code';
+            $row->synonym_name = null;
+            $results->put($row->concept_id, $row);
+        }
+
+        if (DB::getDriverName() === 'pgsql') {
+            $this->pgSearch($results, $query, $vocabularies, $domain, $standardOnly, $validOnly, $limit);
+        } else {
+            $this->likeSearch($results, $query, $vocabularies, $domain, $standardOnly, $validOnly, $limit);
+        }
+
+        return $results->sortByDesc('score')->take($limit)->values();
+    }
+
+    private function applyFilters($builder, array $vocabularies, string $domain, bool $standardOnly, bool $validOnly): void
+    {
+        if (count($vocabularies)) {
+            $builder->whereIn('vocabulary_id', $vocabularies);
+        }
+        if ($domain !== 'all' && $domain !== '') {
+            $builder->where('domain_id', $domain);
+        }
+        if ($standardOnly) {
+            $builder->where('standard_concept', 'S');
+        }
+        if ($validOnly) {
+            $builder->whereNull('invalid_reason');
+        }
+    }
+
+    private function pgSearch(Collection $results, string $q, array $vocabularies, string $domain, bool $standardOnly, bool $validOnly, int $limit): void
+    {
+        $needle = strtolower($q);
+
+        // Names
+        $names = DB::table('concepts')
+            ->selectRaw('*, similarity(lower(concept_name), ?) as score', [$needle])
+            ->whereRaw('lower(concept_name) % ?', [$needle]);
+        $this->applyFilters($names, $vocabularies, $domain, $standardOnly, $validOnly);
+        foreach ($names->orderByDesc('score')->limit($limit)->get() as $row) {
+            $this->merge($results, $row, (float) $row->score, 'name');
+        }
+
+        // Synonyms
+        $syns = DB::table('concept_synonyms as s')
+            ->join('concepts as c', 'c.concept_id', '=', 's.concept_id')
+            ->selectRaw('c.*, s.concept_synonym_name, similarity(lower(s.concept_synonym_name), ?) as score', [$needle])
+            ->whereRaw('lower(s.concept_synonym_name) % ?', [$needle]);
+        $this->applyFilters($syns, $vocabularies, $domain, $standardOnly, $validOnly);
+        foreach ($syns->orderByDesc('score')->limit($limit)->get() as $row) {
+            $this->merge($results, $row, (float) $row->score, 'synonym', $row->concept_synonym_name);
+        }
+    }
+
+    private function likeSearch(Collection $results, string $q, array $vocabularies, string $domain, bool $standardOnly, bool $validOnly, int $limit): void
+    {
+        $needle = '%'.strtolower($q).'%';
+
+        $names = DB::table('concepts')->whereRaw('lower(concept_name) like ?', [$needle]);
+        $this->applyFilters($names, $vocabularies, $domain, $standardOnly, $validOnly);
+        foreach ($names->limit($limit)->get() as $row) {
+            $this->merge($results, $row, strlen($q) / max(1, strlen($row->concept_name)), 'name');
+        }
+
+        $syns = DB::table('concept_synonyms as s')
+            ->join('concepts as c', 'c.concept_id', '=', 's.concept_id')
+            ->select('c.*', 's.concept_synonym_name')
+            ->whereRaw('lower(s.concept_synonym_name) like ?', [$needle]);
+        $this->applyFilters($syns, $vocabularies, $domain, $standardOnly, $validOnly);
+        foreach ($syns->limit($limit)->get() as $row) {
+            $this->merge($results, $row, strlen($q) / max(1, strlen($row->concept_synonym_name)), 'synonym', $row->concept_synonym_name);
+        }
+    }
+
+    private function merge(Collection $results, object $row, float $score, string $matchedOn, ?string $synonym = null): void
+    {
+        $existing = $results->get($row->concept_id);
+        if ($existing && $existing->score >= $score) {
+            return;
+        }
+        $row->score = round($score, 3);
+        $row->matched_on = $matchedOn;
+        $row->synonym_name = $synonym;
+        unset($row->concept_synonym_name);
+        $results->put($row->concept_id, $row);
+    }
+}
