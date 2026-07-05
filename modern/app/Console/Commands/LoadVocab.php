@@ -58,6 +58,12 @@ class LoadVocab extends Command
             return self::FAILURE;
         }
 
+        // Optional custom extensions (e.g. Canadian ICD-10-CA / CCI / SNOMED CT-CA)
+        // appended into the SAME staging tables, so they become part of this
+        // atomic vintage and are re-applied on every refresh. See
+        // docs/vocab-refresh.md ("Canadian (BC) vocabulary extensions").
+        $customConcepts = $this->loadCustom($dir, $copyOpts);
+
         $counts = [
             'concepts' => DB::table('concepts_stg')->count(),
             'synonyms' => DB::table('concept_synonyms_stg')->count(),
@@ -66,6 +72,9 @@ class LoadVocab extends Command
         ];
         foreach ($counts as $k => $v) {
             $this->line(sprintf('  %-14s %d rows', $k, $v));
+        }
+        if ($customConcepts > 0) {
+            $this->line("  (includes $customConcepts custom/extension concept rows)");
         }
         if ($counts['concepts'] < 1 || $counts['vocabularies'] < 1) {
             $this->error('Aborting: empty CONCEPT or VOCABULARY staging table.');
@@ -129,5 +138,55 @@ class LoadVocab extends Command
         $this->line('Next: review the vocabulary impact report for maps whose targets changed.');
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Append optional custom-extension files (same 4 shapes, `_CUSTOM` suffix)
+     * into the staging tables so they ride the same atomic swap and are
+     * re-applied on every refresh. Custom concepts must use concept_id >= 2e9
+     * (OHDSI convention) to avoid colliding with Athena-managed concepts.
+     *
+     * @return int number of custom concept rows loaded
+     */
+    private function loadCustom(string $dir, string $copyOpts): int
+    {
+        $files = [
+            'CONCEPT_CUSTOM.csv' => ['concepts_stg', '(concept_id, concept_name, domain_id, vocabulary_id, concept_class_id, standard_concept, concept_code, valid_start_date, valid_end_date, invalid_reason)'],
+            'CONCEPT_SYNONYM_CUSTOM.csv' => ['concept_synonyms_stg', '(concept_id, concept_synonym_name, language_concept_id)'],
+            'CONCEPT_RELATIONSHIP_CUSTOM.csv' => ['concept_relationships_stg', '(concept_id_1, concept_id_2, relationship_id, valid_start_date, valid_end_date, invalid_reason)'],
+            'VOCABULARY_CUSTOM.csv' => ['vocabularies_stg', '(vocabulary_id, vocabulary_name, vocabulary_reference, vocabulary_version, vocabulary_concept_id)'],
+        ];
+
+        $loadedAny = false;
+        foreach ($files as $file => [$table, $columns]) {
+            // COPY runs server-side in the db container, so we can't stat the
+            // file from the app container. Attempt it; a missing file is a
+            // clean skip, anything else (malformed data) fails loudly.
+            try {
+                DB::statement("COPY $table $columns FROM '$dir/$file' $copyOpts");
+                $this->info("Loaded custom extension: $file");
+                $loadedAny = true;
+            } catch (\Throwable $e) {
+                if (str_contains($e->getMessage(), 'could not open file') || str_contains($e->getMessage(), 'No such file')) {
+                    continue; // extension file not provided — fine
+                }
+                throw $e;
+            }
+        }
+
+        if (! $loadedAny) {
+            return 0;
+        }
+
+        // Guardrail: custom concepts should be in the 2-billion range.
+        $low = DB::table('concepts_stg')
+            ->where('concept_id', '<', 2000000000)
+            ->where('concept_id', '>=', 1000000000) // heuristic: flag obvious mistakes, Athena ids are lower
+            ->count();
+        if ($low > 0) {
+            $this->warn("  note: $low staged concept(s) sit in [1e9, 2e9) — custom concepts should use concept_id >= 2,000,000,000 to avoid Athena collisions.");
+        }
+
+        return (int) DB::table('concepts_stg')->where('concept_id', '>=', 2000000000)->count();
     }
 }

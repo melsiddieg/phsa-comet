@@ -101,6 +101,95 @@ that are standard and valid in the *current* release.
   untouched — a refresh only changes what the impact report and domain views
   *say about* those maps, never the maps themselves.
 
+## Canadian (BC) vocabulary extensions
+
+The vocabularies most relevant to a BC/PHSA deployment are **not in Athena's
+standard set** and are separately licensed:
+
+| Vocabulary | What it is | Source / licence |
+|---|---|---|
+| **ICD-10-CA** | Canadian diagnosis classification | CIHI (licence required) |
+| **CCI** | Canadian Classification of Health Interventions (procedures) | CIHI (licence required) |
+| **SNOMED CT-CA** | Canadian edition of SNOMED CT (Canadian-extension concepts) | Canada Health Infoway / SNOMED International |
+| **pCLOCD** | pan-Canadian LOINC Observation Code Database | Canada Health Infoway |
+| **DPD / DIN** | Health Canada Drug Product Database identifiers | Health Canada |
+
+BC-local code sets (facility/location codes, MSP fee items, PharmaNet, etc.)
+are **source terms** — they come in through the MappingReport import and are
+mapped inside COMET; they are not vocabulary extensions. Where no standard
+target exists for a Canadian code, use the term's **SDO Submission** status to
+queue it for the OHDSI vocabulary team rather than forcing a wrong target.
+
+### How OMOP represents these
+
+Athena keeps the international standards (SNOMED CT International, LOINC, RxNorm,
+UCUM, …). Canadian classifications are loaded as **custom source vocabularies**
+using the OHDSI **2-billion convention**: every custom concept gets a
+`concept_id >= 2,000,000,000` (Athena-managed ids stay below that, so there is
+no collision), a non-standard `standard_concept` (they are *source* codes), and
+a `Maps to` relationship to the standard concept it maps to. CIHI already
+publishes **SNOMED CT-CA → ICD-10-CA / CCI** map refsets (120,000+ rules) that
+can seed those `Maps to` rows — with the appropriate ICD-10-CA (CIHI) and
+SNOMED CT (Infoway) licences.
+
+### Loading them with COMET
+
+`comet:load-vocab` automatically picks up optional **`*_CUSTOM.csv`** files
+placed in the **same directory** as the Athena download and appends them into
+the same atomic swap — so custom concepts share the release's vintage and are
+**re-applied on every refresh** (they are not wiped when you reload Athena):
+
+```
+vocab_data/athena_2026q2/
+  CONCEPT.csv                       # Athena
+  CONCEPT_SYNONYM.csv
+  CONCEPT_RELATIONSHIP.csv
+  VOCABULARY.csv
+  CONCEPT_CUSTOM.csv                # Canadian extensions (optional)
+  CONCEPT_SYNONYM_CUSTOM.csv
+  CONCEPT_RELATIONSHIP_CUSTOM.csv
+  VOCABULARY_CUSTOM.csv
+```
+
+Each `*_CUSTOM.csv` has the **same tab-delimited columns** as its Athena
+counterpart. Minimal example — register ICD-10-CA as a source vocabulary and
+map `I10` to the standard SNOMED concept for essential hypertension:
+
+```
+# VOCABULARY_CUSTOM.csv
+vocabulary_id  vocabulary_name    vocabulary_reference   vocabulary_version  vocabulary_concept_id
+ICD10CA        ICD-10-CA (CIHI)   https://www.cihi.ca    CIHI 2024           2000000000
+
+# CONCEPT_CUSTOM.csv   (standard_concept blank = source code; concept_id >= 2e9)
+concept_id   concept_name                       domain_id  vocabulary_id  concept_class_id  standard_concept  concept_code  valid_start_date  valid_end_date  invalid_reason
+2000000001   Essential (primary) hypertension   Condition  ICD10CA        ICD10CA code                        I10           20220401          20991231
+
+# CONCEPT_RELATIONSHIP_CUSTOM.csv   (Canadian source -> OMOP standard)
+concept_id_1  concept_id_2  relationship_id  valid_start_date  valid_end_date  invalid_reason
+2000000001    320128        Maps to          20220401          20991231
+```
+
+Then load as usual:
+
+```bash
+docker compose exec app php artisan comet:load-vocab /vocab_data/athena_2026q2 --by="Your Name"
+```
+
+The loader reports `(includes N custom/extension concept rows)` and warns if any
+staged concept sits in `[1e9, 2e9)` (a sign a custom id wasn't lifted into the
+2-billion range). A worked fixture lives in `db/fixtures/athena_sample/` (the
+`*_CUSTOM.csv` files there add an ICD-10-CA concept mapping to the standard
+SNOMED hypertension concept).
+
+Notes:
+- Keep the licensed raw files under `vocab_data/` (git-ignored) — do not commit
+  CIHI/Infoway/Health-Canada content.
+- Add each custom `vocabulary_id` (e.g. `ICD10CA`) to the relevant sheet's
+  allowed vocabularies (`sheet_vocabularies`) so mappers can select it.
+- Because the custom rows ride the atomic swap, keep the `*_CUSTOM.csv` files in
+  the download directory for **every** refresh; if you drop them, the next load
+  won't include them.
+
 ## Cadence
 
 Refresh **quarterly**, or when the OHDSI vocabulary team announces a release
