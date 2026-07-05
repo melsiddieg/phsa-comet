@@ -57,6 +57,48 @@ class MapExporter
         });
     }
 
+    /**
+     * SDO submission queue: terms flagged for the standards body because no
+     * standard target exists. Includes both statuses (to send / already sent)
+     * with a column to tell them apart, the source code + description, usage
+     * count (justification), any suggested target that was considered, and the
+     * mapper's comment (rationale).
+     */
+    public function streamSdoSubmissions(): StreamedResponse
+    {
+        return $this->stream('SDO_Submissions_'.now()->format('Ymd').'.csv', function ($out) {
+            fputcsv($out, [
+                'sheet', 'sdo_status', 'source_vocabulary', 'source_code', 'source_description',
+                'usage_count', 'suggested_concept_id', 'comment',
+            ]);
+
+            DB::table('source_terms as t')
+                ->join('sheets as s', 's.id', '=', 't.sheet_id')
+                ->leftJoin('source_term_codes as c', fn ($j) => $j->on('c.source_term_id', '=', 't.id')->where('c.spot', 1))
+                ->leftJoin('sheet_source_columns as ssc', fn ($j) => $j->on('ssc.sheet_id', '=', 't.sheet_id')->where('ssc.spot', 1))
+                ->leftJoin('source_term_comments as cm', 'cm.source_term_id', '=', 't.id')
+                ->leftJoin('suggested_targets as st', 'st.source_term_id', '=', 't.id')
+                ->whereIn('t.exclude_status', ['SDO Submission - Send', 'SDO Submitted - Pending'])
+                // "to send" first, then by highest usage so the biggest gaps lead
+                ->orderByRaw("case when t.exclude_status = 'SDO Submission - Send' then 0 else 1 end")
+                ->orderByDesc('t.total_count')
+                ->select(
+                    's.name as sheet', 't.exclude_status', 'ssc.vocabulary as source_vocabulary',
+                    'c.code', 'c.description', 't.total_count', 'st.concept_id as suggested', 'cm.comment_text'
+                )
+                ->lazy()->each(fn ($r) => fputcsv($out, [
+                    $r->sheet,
+                    $r->exclude_status === 'SDO Submission - Send' ? 'To send' : 'Submitted - pending',
+                    $r->source_vocabulary,
+                    $r->code,
+                    $r->description,
+                    $r->total_count,
+                    $r->suggested,
+                    $r->comment_text,
+                ]));
+        });
+    }
+
     /** Live maps as STCM rows (linked term codes + unlinked snapshots). */
     private function liveRows()
     {

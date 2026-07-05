@@ -36,6 +36,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/export/stcm', [ExportController::class, 'stcm'])->name('export.stcm');
     Route::get('/export/stcm/{release}', [ExportController::class, 'stcm'])->name('export.stcm.release')->whereNumber('release');
     Route::get('/export/exclusions', [ExportController::class, 'exclusions'])->name('export.exclusions');
+    Route::get('/export/sdo', [ExportController::class, 'sdoSubmissions'])->name('export.sdo');
 
     Route::get('/admin/releases', ReleasesAdmin::class)->name('admin.releases');
     Route::get('/admin/users', UserAdmin::class)->name('admin.users');

@@ -16,4 +16,9 @@ class ExportController extends Controller
     {
         return $exporter->streamExclusions();
     }
+
+    public function sdoSubmissions(MapExporter $exporter): StreamedResponse
+    {
+        return $exporter->streamSdoSubmissions();
+    }
 }
