@@ -28,5 +28,9 @@ return [
         ['id' => 'M5', 'title' => 'Review & approval workflow with snapshots', 'status' => 'done'],
         ['id' => 'M6', 'title' => 'Exports (STCM/exclusions), releases & user admin', 'status' => 'done'],
         ['id' => 'M7', 'title' => 'Vocabulary impact report & cutover parity', 'status' => 'done'],
+        ['id' => 'P1', 'title' => 'Hybrid ranked search, hierarchy & concept browser', 'status' => 'done'],
+        ['id' => 'P2', 'title' => 'Auto-mapper candidates, keyboard mapping mode, equivalence', 'status' => 'done'],
+        ['id' => 'P3', 'title' => 'Canadian vocabulary converters (CIHI/Infoway)', 'status' => 'done'],
+        ['id' => 'P4', 'title' => 'Team workflow — claims, review loop, dashboard', 'status' => 'done'],
     ],
 ];
