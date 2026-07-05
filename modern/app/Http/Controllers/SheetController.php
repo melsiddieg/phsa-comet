@@ -28,6 +28,21 @@ class SheetController extends Controller
             ->orderByDesc('map_count')
             ->get();
 
-        return view('sheets.domain-index', ['domains' => $domains]);
+        $totalMaps = DB::table('maps')->count();
+        // A map's domain lives in the concepts table; targets absent from the
+        // loaded vocabulary can't be attributed to a domain (partial/empty
+        // vocabulary), so surface that instead of silently dropping them.
+        $unresolved = DB::table('maps')
+            ->leftJoin('concepts', 'concepts.concept_id', '=', 'maps.target_concept_id')
+            ->whereNull('concepts.concept_id')
+            ->count();
+
+        return view('sheets.domain-index', [
+            'domains' => $domains,
+            'totalMaps' => $totalMaps,
+            'resolved' => $totalMaps - $unresolved,
+            'unresolved' => $unresolved,
+            'vocabRelease' => DB::table('vocab_meta')->latest('id')->value('athena_release'),
+        ]);
     }
 }

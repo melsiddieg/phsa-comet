@@ -90,7 +90,25 @@ class ReadPathsTest extends TestCase
         $this->actingAs($this->actingUser())
             ->get('/domains')
             ->assertOk()
-            ->assertSee('Visit');
+            ->assertSee('Visit')
+            ->assertSee('1 of 1 maps resolve');
+    }
+
+    public function test_domain_index_surfaces_unresolved_maps(): void
+    {
+        $this->seedSheet();
+        // a map whose target is NOT in the loaded vocabulary
+        $orphanTerm = SourceTerm::create(['sheet_id' => \App\Models\Sheet::first()->id]);
+        MapEntry::create([
+            'source_term_id' => $orphanTerm->id, 'target_concept_id' => 99999999,
+            'target_concept_name' => 'Not loaded', 'target_vocabulary_id' => 'X',
+        ]);
+
+        $this->actingAs($this->actingUser())
+            ->get('/domains')
+            ->assertOk()
+            ->assertSee('1 of 2 maps resolve')
+            ->assertSee('1 map(s) are not counted below');
     }
 
     public function test_read_paths_require_auth(): void

@@ -2,7 +2,30 @@
 @section('title', 'Mapped Terms by OMOP Domain')
 @section('content')
 <div class="card">
-    <h1 style="color: var(--comet-gold);">Mapped Terms by OMOP Domain</h1>
+    <div style="display:flex; align-items:baseline; gap:1rem; flex-wrap:wrap;">
+        <h1 style="color: var(--comet-gold); margin:0;">Mapped Terms by OMOP Domain</h1>
+        @if ($vocabRelease)
+            <span style="font-size:0.85rem; color: var(--comet-brown);">OMOP vocabulary: <b>{{ $vocabRelease }}</b></span>
+        @else
+            <span style="font-size:0.85rem; color:#b00020;">No vocabulary loaded</span>
+        @endif
+    </div>
+
+    <p style="color:#555;">
+        {{ number_format($resolved) }} of {{ number_format($totalMaps) }} maps resolve to a concept in the loaded vocabulary.
+    </p>
+
+    @if ($unresolved > 0)
+        <div class="card" style="background:#fff6e0; border-color:#d0b060; margin:0.5rem 0 1rem;">
+            <b style="color:#8a5a00;">{{ number_format($unresolved) }} map(s) are not counted below</b> —
+            their target concept isn't in the currently loaded vocabulary
+            @if ($vocabRelease)(<b>{{ $vocabRelease }}</b>)@endif,
+            so their OMOP domain can't be determined. This is expected when only a partial or dev-fixture
+            vocabulary is loaded; load a full Athena release
+            (<code>comet:load-vocab</code>, see <code>docs/vocab-refresh.md</code>) for the complete domain distribution.
+        </div>
+    @endif
+
     @if ($domains->isEmpty())
         <p style="color:#b00020;">No maps resolve to a loaded concept yet — load a full OMOP vocabulary to populate domains.</p>
     @else
