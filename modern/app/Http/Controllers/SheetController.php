@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\SheetProgress;
+use App\Services\TeamStats;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 
@@ -15,6 +16,18 @@ class SheetController extends Controller
             'rows' => $progress->all(),
             'totals' => $progress->totals(),
             'vocabRelease' => DB::table('vocab_meta')->latest('id')->value('athena_release'),
+        ]);
+    }
+
+    /** Team dashboard — throughput, backlog, pipeline (reviewer/admin). */
+    public function team(TeamStats $stats): View
+    {
+        abort_unless(auth()->user()->is_reviewer || auth()->user()->is_portal_admin, 403);
+
+        return view('team.dashboard', [
+            'throughput' => $stats->throughput(),
+            'backlog' => $stats->reviewBacklog(),
+            'pipeline' => $stats->pipeline(),
         ]);
     }
 

@@ -45,9 +45,20 @@ class TermEditor extends Component
     /** @var array<int, array<string,mixed>> replacement suggestions after a guardrail rejection */
     public array $replacements = [];
 
+    public string $claimNote = '';
+
     public function mount(int $termId): void
     {
         $this->term = SourceTerm::with(['codes', 'sheet.sourceColumns', 'maps', 'comment'])->findOrFail($termId);
+
+        // Claim the term (unless someone else holds a fresh claim).
+        if (auth()->user()->is_mapper) {
+            $holder = app(\App\Services\ClaimService::class)->claim($this->term, auth()->user()->name);
+            if ($holder !== auth()->user()->name) {
+                $this->claimNote = "Currently claimed by {$holder} — edits still allowed, but coordinate to avoid collisions.";
+            }
+            $this->term->refresh();
+        }
         $this->searchQuery = (string) ($this->term->codes->firstWhere('spot', 1)->description ?? '');
         $this->newVocabulary = (string) $this->term->sheet->vocabularyNames()->orderBy('vocabulary')->value('vocabulary');
         $this->excludeStatus = (string) $this->term->exclude_status;
@@ -103,6 +114,7 @@ class TermEditor extends Component
             'created_by' => auth()->user()->name,
         ]);
         app(MapAuditor::class)->logMapChange('Add', $map, auth()->user()->name);
+        $this->clearReturnedState();
 
         $this->newCode = '';
         $this->refreshTerm();
@@ -139,6 +151,7 @@ class TermEditor extends Component
             'updated_by' => auth()->user()->name,
         ]);
         app(MapAuditor::class)->logMapChange('Update', $map, auth()->user()->name, $before);
+        $this->clearReturnedState();
 
         $this->refreshTerm();
         $this->dispatch('map-saved');
@@ -262,10 +275,22 @@ class TermEditor extends Component
 
     public function close(): void
     {
+        if (auth()->user()->is_mapper) {
+            app(\App\Services\ClaimService::class)->release($this->term, auth()->user()->name);
+        }
         $this->dispatch('editor-closed');
     }
 
     // ── Internals ──────────────────────────────────────────────────────
+
+    /** A mapper acting on a map clears a reviewer's "changes requested" flag. */
+    private function clearReturnedState(): void
+    {
+        if ($this->term->review_state === 'returned') {
+            $this->term->update(['review_state' => null]);
+            $this->term->refresh();
+        }
+    }
 
     private function rejectTarget($concept, MapGuardrails $guard): void
     {

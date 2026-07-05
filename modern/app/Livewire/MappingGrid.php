@@ -69,11 +69,16 @@ class MappingGrid extends Component
         // Base: one row per source term in this sheet.
         $query = DB::table('source_terms as t')
             ->where('t.sheet_id', $this->sheet->id)
-            ->select('t.id', 't.total_count', 't.map_source', 't.mr_status', 't.exclude_status')
+            ->select('t.id', 't.total_count', 't.map_source', 't.mr_status', 't.exclude_status',
+                't.claimed_by', 't.claimed_at', 't.review_state')
             ->selectSub(
                 DB::table('maps')->selectRaw('count(*)')->whereColumn('maps.source_term_id', 't.id'),
                 'map_count'
             );
+
+        if ($this->status === 'returned') {
+            $query->where('t.review_state', 'returned');
+        }
 
         // ── Status filter
         match ($this->status) {

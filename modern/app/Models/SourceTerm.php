@@ -14,12 +14,23 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property-read Collection<int, MapEntry> $maps
  * @property-read Collection<int, SuggestedTarget> $suggestedTargets
  * @property-read SourceTermComment|null $comment
+ * @property ?string $claimed_by
+ * @property ?\Illuminate\Support\Carbon $claimed_at
+ * @property ?string $review_state
+ * @property ?string $returned_to
+ * @property ?string $updated_by
+ * @property ?string $exclude_status
  */
 class SourceTerm extends Model
 {
     protected $table = 'source_terms';
 
     protected $guarded = [];
+
+    protected function casts(): array
+    {
+        return ['claimed_at' => 'datetime'];
+    }
 
     public function sheet(): BelongsTo
     {

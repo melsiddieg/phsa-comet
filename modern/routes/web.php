@@ -35,6 +35,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/sheets/{sheet}/map', MappingMode::class)->name('sheets.map');
     Route::get('/import', ImportManager::class)->name('import');
     Route::get('/review', ReviewQueue::class)->name('review');
+    Route::get('/team', [SheetController::class, 'team'])->name('team');
     Route::get('/vocab-impact', VocabImpactReport::class)->name('vocab.impact');
 
     Route::get('/export/stcm', [ExportController::class, 'stcm'])->name('export.stcm');

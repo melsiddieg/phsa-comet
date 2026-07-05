@@ -22,6 +22,7 @@
                 <option value="q">Questions only</option>
                 <option value="s">To submit to SDO</option>
                 <option value="p">Submitted to SDO</option>
+                <option value="returned">Returned by reviewer</option>
             </select>
         </label>
         <label>Mapped<br>
@@ -77,6 +78,8 @@
                 <tr style="background:{{ $bg }}; border-bottom:1px solid #e8e8e8;">
                     <td style="padding:0.4rem; white-space:nowrap;">
                         <a href="#" wire:click.prevent="openEditor({{ $term->id }})" title="Open editor" style="text-decoration:none; margin-right:0.3rem;">✏️</a>
+                        @if ($term->review_state === 'returned')<span title="Returned by reviewer">↩</span>@endif
+                        @if ($term->claimed_by && $term->claimed_at && \Illuminate\Support\Carbon::parse($term->claimed_at)->gt(now()->subHours((int) config('comet.claim_ttl_hours', 4))))<span title="Claimed by {{ $term->claimed_by }}">👤</span>@endif
                         @switch($term->exclude_status)
                             @case('Out of Scope - Exclude') <span title="Excluded">🚫</span> @break
                             @case('Question - Pending') <span title="Question">❓</span> @break

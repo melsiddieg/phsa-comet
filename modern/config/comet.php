@@ -7,6 +7,9 @@ return [
     // Directory (as seen by the Postgres container) holding Athena downloads.
     'vocab_data_path' => env('VOCAB_DATA_PATH', '/vocab_data'),
 
+    // Hours after which a term claim is considered stale and can be taken over.
+    'claim_ttl_hours' => (int) env('COMET_CLAIM_TTL_HOURS', 4),
+
     // Hybrid concept-search tuning (see App\Services\ConceptSearch).
     'search' => [
         'trigram_threshold' => (float) env('SEARCH_TRIGRAM_THRESHOLD', 0.25),
