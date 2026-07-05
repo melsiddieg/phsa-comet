@@ -32,6 +32,10 @@ services:
     env_file: .env
     volumes:
       - ./public:/var/www/html  # Public entry-point files :contentReference[oaicite:5]{index=5}
+      - ./bin:/var/www/bin:ro                # CLI scripts (migrate.php, load_vocab.php)
+      - ./db/migrations:/var/www/migrations:ro
+      - ./db/fixtures:/var/www/fixtures:ro
+      - ./vocab_data:/var/www/vocab_data:ro  # drop unzipped Athena downloads here
     depends_on:
       - db                            # simple ordering without condition :contentReference[oaicite:6]{index=6}
     secrets: [comet_app_pw]

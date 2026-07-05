@@ -109,29 +109,32 @@ if( count($_POST) )
 			die("invalid vocabulary $vocabulary");
 		if( !check_map_against_data($pdo, $map_id, $data_id) )
 			die("invalid map id $map_id");
-		
-		########### Getting before_update_target_concept_id
-		$sql = "select target_concept_id from phsa_all_maps where id = $map_id";
-		$rs = $pdo->query($sql);
-		if( !($ft = $rs->fetch(PDO::FETCH_ASSOC)) )
-			die("Unknown SQL error 6276");
-		$before_update_target_concept_id = $ft["target_concept_id"];
-		####################
-		
-		$sql = "update phsa_all_maps m, omop_concept c 
-				set 
-					m.target_concept_id = c.concept_id, 
-					m.target_concept_name = c.concept_name, 
-					m.target_vocabulary_id = '$vocabulary'					
-				where 
-					m.id = $map_id and
-					c.concept_code = '$map_code' and 
-					c.vocabulary_id = '$vocabulary'
-				limit 1";
 
-		$rs = $pdo->query($sql);
-		$action = "Update";
-		log_map_hx($pdo, $map_id, $action, $before_update_target_concept_id);
+		########### Guardrails: target must exist and be a standard, valid concept
+		$concept = resolve_concept($pdo, $map_code, $vocabulary);
+		if( !$concept )
+			$success_msg = "<font color='red'>Concept code '" . htmlspecialchars($map_code, ENT_QUOTES) . "' not found in vocabulary '" . htmlspecialchars($vocabulary, ENT_QUOTES) . "'.</font>";
+		elseif( !is_valid_map_target($concept) )
+			$success_msg = build_target_rejection_msg($pdo, $concept);
+		else
+		{
+			########### Getting before_update_target_concept_id
+			$sql = "select target_concept_id from phsa_all_maps where id = $map_id";
+			$rs = $pdo->query($sql);
+			if( !($ft = $rs->fetch(PDO::FETCH_ASSOC)) )
+				die("Unknown SQL error 6276");
+			$before_update_target_concept_id = $ft["target_concept_id"];
+			####################
+
+			$stmt = $pdo->prepare(
+				"update phsa_all_maps
+				 set target_concept_id = ?, target_concept_name = ?, target_vocabulary_id = ?
+				 where id = ?"
+			);
+			$stmt->execute([$concept["concept_id"], $concept["concept_name"], $vocabulary, $map_id]);
+			$action = "Update";
+			log_map_hx($pdo, $map_id, $action, $before_update_target_concept_id);
+		}
 	}
 	elseif( isset($_POST["submit_delete"]) && isset($_POST["map_id"]) && is_numeric($_POST["map_id"]) && isset($_SESSION["PHSA_PRIV_MAP"]) && $_SESSION["PHSA_PRIV_MAP"] === "1" )
 	{
@@ -156,31 +159,37 @@ if( count($_POST) )
 		{
 			if( !check_vocabulary_valid($pdo, $ft_data["sheet_id"], $vocabulary) )
 				die("invalid vocabulary $vocabulary");
-			
-			$sql = "insert into phsa_all_maps ( src_data_id, 
-												source_vocabulary_id_1, source_code_1, source_code_description_1, 
-												source_vocabulary_id_2, source_code_2, source_code_description_2, 
-												source_vocabulary_id_3, source_code_3, source_code_description_3, 
-												source_vocabulary_id_4, source_code_4, source_code_description_4, 
-												source_vocabulary_id_5, source_code_5, source_code_description_5, 
-												source_vocabulary_id_6, source_code_6, source_code_description_6, 
-												target_concept_id, target_concept_name, target_vocabulary_id)
-					select $data_id,
-					";
-			for( $i = 1 ; $i <= 6 ; $i++ )
+
+			########### Guardrails: target must exist and be a standard, valid concept
+			$concept = resolve_concept($pdo, $map_code, $vocabulary);
+			if( !$concept )
+				$success_msg = "<font color='red'>Concept code '" . htmlspecialchars($map_code, ENT_QUOTES) . "' not found in vocabulary '" . htmlspecialchars($vocabulary, ENT_QUOTES) . "'.</font>";
+			elseif( !is_valid_map_target($concept) )
+				$success_msg = build_target_rejection_msg($pdo, $concept);
+			else
 			{
-				if( isset($ft_sheet["src_voc_name_$i"]) )
-					$sql .= "'" . $ft_sheet["src_voc_name_$i"] . "', '" . $sources_arr[$i]["code"] . "', '" . $sources_arr[$i]["description"] . "', ";
-				else
-					$sql .= "'', '', '', ";
+				$cols   = ["src_data_id"];
+				$values = [$data_id];
+				for( $i = 1 ; $i <= 6 ; $i++ )
+				{
+					array_push($cols, "source_vocabulary_id_$i", "source_code_$i", "source_code_description_$i");
+					if( isset($ft_sheet["src_voc_name_$i"]) && isset($sources_arr[$i]) )
+						array_push($values, $ft_sheet["src_voc_name_$i"], $sources_arr[$i]["code"], $sources_arr[$i]["description"]);
+					else
+						array_push($values, "", "", "");
+				}
+				array_push($cols, "target_concept_id", "target_concept_name", "target_vocabulary_id");
+				array_push($values, $concept["concept_id"], $concept["concept_name"], $vocabulary);
+
+				$stmt = $pdo->prepare(
+					"insert into phsa_all_maps (" . implode(", ", $cols) . ")
+					 values (" . implode(", ", array_fill(0, count($values), "?")) . ")"
+				);
+				$stmt->execute($values);
+				$map_id = $pdo->lastInsertId();
+				$action = "Add";
+				log_map_hx($pdo, $map_id, $action);
 			}
-			$sql .= "concept_id, concept_name, '$vocabulary'
-					from omop_concept where concept_code = '$map_code' and vocabulary_id = '$vocabulary'";
-					
-			$rs = $pdo->query($sql);
-			$map_id = $pdo->lastInsertId();
-			$action = "Add";
-			log_map_hx($pdo, $map_id, $action);
 		}
 	}
 	elseif( isset($_POST["exclude_status"]) && isset($_POST["comment_text"]) && isset($_POST["exclude_status_submit"]) && isset($_SESSION["PHSA_PRIV_MAP"]) && $_SESSION["PHSA_PRIV_MAP"] === "1" )

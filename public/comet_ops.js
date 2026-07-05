@@ -97,7 +97,108 @@ function submit_excl_update(data_id)
 
 
 
-function submit_add_rev(data_id) 
+/* ───────────── Concept search panel (edit_mr_item.php) ───────────── */
+
+function esc_html(s)
+{
+	return String(s == null ? "" : s)
+		.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function esc_js(s)
+{
+	return String(s == null ? "" : s)
+		.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/"/g, "&quot;");
+}
+
+function concept_search(sheet_id)
+{
+	var kw = $("#concept_kw").val().trim();
+	if( kw == "" )
+		return false;
+
+	$("#concept_results").html("<i>Searching...</i>");
+
+	$.post("search_concept.php",
+		{
+			kw: kw,
+			sheet_id: sheet_id,
+			domain: $("#concept_domain").val(),
+			vocab: $("#concept_vocab").val(),
+			standard_only: $("#concept_std").is(":checked") ? "1" : "0",
+			valid_only: $("#concept_valid").is(":checked") ? "1" : "0"
+		},
+		function(data) { render_concept_results(data); },
+		"json"
+	).fail(function() {
+		$("#concept_results").html("<font color='red'>Search failed - is the OMOP vocabulary loaded?</font>");
+	});
+}
+
+function render_concept_results(data)
+{
+	var rows = data.results || [];
+	if( rows.length == 0 )
+	{
+		$("#concept_results").html("No concepts found. Try fewer words, the 'All' vocabulary filter, or unticking 'Standard only'.");
+		return;
+	}
+
+	var h = "<table border='1' cellspacing='0' cellpadding='3' style='font-size:10pt; background-color:white;'>";
+	h += "<tr style='color:white; background-color:#202080;'><td></td><td>Score</td><td>Concept Name</td><td>Code</td><td>Domain</td><td>Vocabulary</td><td>Class</td><td>Matched on</td></tr>";
+
+	for( var i = 0 ; i < rows.length ; i++ )
+	{
+		var r = rows[i];
+		var matched = r.matched_on == "synonym" ? "synonym: " + esc_html(r.synonym_name) : r.matched_on;
+		var flag = (r.standard_concept != "S" || r.invalid_reason) ? " <font color='red'>(non-standard)</font>" : "";
+		h += "<tr>";
+		h += "<td><button onclick=\"pick_concept('" + esc_js(r.concept_code) + "', '" + esc_js(r.vocabulary_id) + "')\">Use</button></td>";
+		h += "<td>" + esc_html(r.score) + "</td>";
+		h += "<td>" + esc_html(r.concept_name) + flag + "</td>";
+		h += "<td>" + esc_html(r.concept_code) + "</td>";
+		h += "<td>" + esc_html(r.domain_id) + "</td>";
+		h += "<td>" + esc_html(r.vocabulary_id) + "</td>";
+		h += "<td>" + esc_html(r.concept_class_id) + "</td>";
+		h += "<td>" + matched + "</td>";
+		h += "</tr>";
+	}
+	h += "</table>";
+
+	if( data.vocab_release )
+		h += "<div style='font-size:9pt; color:#606060; margin-top:4px;'>Vocabulary release: " + esc_html(data.vocab_release) + "</div>";
+
+	$("#concept_results").html(h);
+}
+
+function submit_propagate(data_id, concept_id)
+{
+	if( !confirm("Apply this target to all identical unmapped terms in this sheet?") )
+		return false;
+
+	$("#mr_edit_content_div").load("edit_mr_item.php?id=" + data_id,
+								{
+									prop_concept_id: concept_id,
+									submit_propagate: 1
+								});
+}
+
+function pick_concept(code, vocab)
+{
+	$("#new_map_code").val(code);
+	$("#new_map_vocabulary").val(vocab);
+
+	// also offer it in the update form of an existing map, if present
+	$("input[name='update_map_code']").val(code);
+	$("select[name='update_map_vocabulary']").val(vocab);
+
+	$("#new_map_code").css("background-color", "#d0ffd0");
+	setTimeout(function() { $("#new_map_code").css("background-color", ""); }, 1200);
+}
+
+
+function submit_add_rev(data_id)
 {
 	if( $("#new_map_code").val() == "" )
 	{

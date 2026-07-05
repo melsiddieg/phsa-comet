@@ -63,16 +63,17 @@ for( $i = 0 ; $i < count($disp_columns) ; $i++ )
 	
 echo "</tr>";
 
-$sql = "select DISTINCT sh.name, sr.description, d.id, d.exclude
+$sql = "select sh.name, sr.description, d.id, d.exclude
 		from phsa_mr_sheets sh, phsa_mr_data d, phsa_mr_data_src_cd_desc sr, phsa_all_maps_hx hx
-		where 	
+		where
 			sh.id = d.sheet_id and
 			d.id = hx.src_data_id and
 			sr.data_id = d.id and
-			sr.spot = 1 and 
+			sr.spot = 1 and
 			hx.approved_by is null and
 			sh.id != 13 -- RETIRED Problem
-		order by sh.id, hx.source_code_description_1
+		group by sh.id, sh.name, sr.description, d.id, d.exclude
+		order by sh.id, sr.description
 		limit $start, $page_size";
 $rs = $pdo->query($sql);
 //echo $sql;

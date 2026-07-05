@@ -1,0 +1,9 @@
+concept_id	concept_name	domain_id	vocabulary_id	concept_class_id	standard_concept	concept_code	valid_start_date	valid_end_date	invalid_reason
+4152194	Systolic blood pressure	Measurement	SNOMED	Observable Entity	S	271649006	20020131	20991231
+4154790	Diastolic blood pressure	Measurement	SNOMED	Observable Entity	S	271650006	20020131	20991231
+4248525	Sitting blood pressure	Measurement	SNOMED	Observable Entity	S	163035008	20020131	20991231
+40481080	Standing blood pressure	Measurement	SNOMED	Observable Entity	S	163034007	20020131	20991231
+3027018	Heart rate	Measurement	LOINC	Clinical Observation	S	8867-4	19700101	20991231
+44806682	Blood pressure reading	Measurement	SNOMED	Observable Entity		392570002	20020131	20991231
+4020553	Blood pressure taking	Measurement	SNOMED	Procedure	S	46973005	20020131	20250131	U
+320128	Essential hypertension	Condition	SNOMED	Clinical Finding	S	59621000	20020131	20991231

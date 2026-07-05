@@ -9,6 +9,15 @@ my_session_start();
 #verify_session();
 $pdo 	= new PDO('mysql:host=' . $_MY_SERV . ';dbname=' . $_MY_DB, $_MY_USER , $_MY_PASS);
 
+### Current OMOP vocabulary release (set by bin/load_vocab.php)
+$vocab_meta = false;
+try {
+	$rs = $pdo->query("select athena_release, loaded_at from comet_vocab_meta order by id desc limit 1");
+	$vocab_meta = $rs ? $rs->fetch(PDO::FETCH_ASSOC) : false;
+} catch (PDOException $e) {
+	$vocab_meta = false; // table not created yet — hide the badge
+}
+
 ?>
 <html>
 <head>
@@ -60,13 +69,21 @@ a.menu_link:hover
 			<tr><td class='menu'><a class='menu_link' href='index_domain.php'>Mapped Terms by OMOP Domain</a></td></tr>
 			<?php
 			if( isset($_SESSION["PHSA_PRIV_REVIEW"]) && $_SESSION["PHSA_PRIV_REVIEW"] === "1" )
+			{
 				echo "<tr><td style='height:20px;'></td></tr><tr><td class='menu'><a class='menu_link' href='list_review.php?start=0'>Review Mapping Changes</a></td></tr>";
+				echo "<tr><td class='menu'><a class='menu_link' href='vocab_impact.php'>Vocabulary Impact Report</a></td></tr>";
+			}
 			?>
 			<tr><td style='height:20px;'></td></tr>
 			<tr><td class='menu'><a class='menu_link' href='export_maps.php'>Export Maps</a></td></tr>
+			<tr><td class='menu'><a class='menu_link' href='export_stcm.php'>Export Maps (OMOP STCM)</a></td></tr>
 			<tr><td class='menu'><a class='menu_link' href='export_exclusions.php'>Export Exclusions</a></td></tr>
+			<?php
+			if( isset($_SESSION["PHSA_PRIV_ADMIN"]) && $_SESSION["PHSA_PRIV_ADMIN"] === "1" )
+				echo "<tr><td class='menu'><a class='menu_link' href='manage_releases.php'>Map Releases</a></td></tr>";
+			?>
 			<tr><td style='height:20px;'></td></tr>
-			
+
 			<?php
 			if( isset($_SESSION["PHSA_PRIV_IMPORT"]) && $_SESSION["PHSA_PRIV_IMPORT"] === "1" )
 			{
@@ -82,6 +99,17 @@ a.menu_link:hover
 </div>
 
 <span style="font-size:33px;cursor:pointer; background-color:#875503; color:#F8EBD5; padding:8px 15px; " onclick="open_index_menu()">&#9776;</span>
+
+<?php if ($vocab_meta): ?>
+<span style="font-size:13px; color:#875503; padding-left:15px;">
+	OMOP vocabulary: <b><?php echo htmlspecialchars($vocab_meta["athena_release"], ENT_QUOTES); ?></b>
+	(loaded <?php echo htmlspecialchars(substr($vocab_meta["loaded_at"], 0, 10), ENT_QUOTES); ?>)
+</span>
+<?php else: ?>
+<span style="font-size:13px; color:#b00020; padding-left:15px;">
+	No OMOP vocabulary loaded &mdash; see docs/vocab-refresh.md
+</span>
+<?php endif; ?>
 
 <div align = 'center'>
 <table width='1000px'  height='90%' border='0' cellpadding = '5'>

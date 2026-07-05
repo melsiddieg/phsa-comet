@@ -108,28 +108,36 @@ if( count($_POST) )
 			die("invalid vocabulary $vocabulary");
 		if( !check_map_against_data($pdo, $map_id, $data_id) )
 			die("invalid map id $map_id");
-		
-		########### Getting before_update_target_concept_id
-		$sql = "select target_concept_id from phsa_all_maps where id = $map_id";
-		$rs = $pdo->query($sql);
-		if( !($ft = $rs->fetch(PDO::FETCH_ASSOC)) )
-			die("Unknown SQL error 6276");
-		$before_update_target_concept_id = $ft["target_concept_id"];
-		####################
-		
-		$sql = "update phsa_all_maps m, omop_concept c 
-				set 
-					m.target_concept_id = c.concept_id, 
-					m.target_concept_name = c.concept_name, 
-					m.target_vocabulary_id = '$vocabulary'					
-				where 
-					m.id = $map_id and
-					c.concept_code = '$map_code' and 
-					c.vocabulary_id = '$vocabulary'
-				";
-		$rs = $pdo->query($sql);
-		$action = "Update";
-		log_map_hx($pdo, $map_id, $action, $before_update_target_concept_id);
+
+		########### Guardrails: target must exist and be a standard, valid concept
+		$concept = resolve_concept($pdo, $map_code, $vocabulary);
+		if( !$concept )
+			$success_msg = "<font color='red'>Concept code '" . htmlspecialchars($map_code, ENT_QUOTES) . "' not found in vocabulary '" . htmlspecialchars($vocabulary, ENT_QUOTES) . "'.</font>";
+		elseif( !is_valid_map_target($concept) )
+			$success_msg = build_target_rejection_msg($pdo, $concept);
+		else
+		{
+			########### Getting before_update_target_concept_id
+			$sql = "select target_concept_id from phsa_all_maps where id = $map_id";
+			$rs = $pdo->query($sql);
+			if( !($ft = $rs->fetch(PDO::FETCH_ASSOC)) )
+				die("Unknown SQL error 6276");
+			$before_update_target_concept_id = $ft["target_concept_id"];
+			####################
+
+			$stmt = $pdo->prepare(
+				"update phsa_all_maps
+				 set target_concept_id = ?, target_concept_name = ?, target_vocabulary_id = ?
+				 where id = ?"
+			);
+			$stmt->execute([$concept["concept_id"], $concept["concept_name"], $vocabulary, $map_id]);
+			$action = "Update";
+			log_map_hx($pdo, $map_id, $action, $before_update_target_concept_id);
+
+			$sheet_domains = get_sheet_domains($pdo, $ft_data["sheet_id"]);
+			if( count($sheet_domains) && !in_array($concept["domain_id"], $sheet_domains) )
+				$success_msg = "Map updated. <font color='#b06000'>Note: target domain '" . htmlspecialchars($concept["domain_id"], ENT_QUOTES) . "' is unusual for this sheet (expected: " . htmlspecialchars(implode(", ", $sheet_domains), ENT_QUOTES) . ").</font>";
+		}
 	}
 	elseif( isset($_POST["submit_delete"]) && isset($_POST["map_id"]) && is_numeric($_POST["map_id"]) )
 	{
@@ -154,31 +162,91 @@ if( count($_POST) )
 		{
 			if( !check_vocabulary_valid($pdo, $ft_data["sheet_id"], $vocabulary) )
 				die("invalid vocabulary $vocabulary");
-			
-			$sql = "insert into phsa_all_maps ( src_data_id, 
-												source_vocabulary_id_1, source_code_1, source_code_description_1, 
-												source_vocabulary_id_2, source_code_2, source_code_description_2, 
-												source_vocabulary_id_3, source_code_3, source_code_description_3, 
-												source_vocabulary_id_4, source_code_4, source_code_description_4, 
-												source_vocabulary_id_5, source_code_5, source_code_description_5, 
-												source_vocabulary_id_6, source_code_6, source_code_description_6, 
-												target_concept_id, target_concept_name, target_vocabulary_id)
-					select $data_id,
-					";
-			for( $i = 1 ; $i <= 6 ; $i++ )
+
+			########### Guardrails: target must exist and be a standard, valid concept
+			$concept = resolve_concept($pdo, $map_code, $vocabulary);
+			if( !$concept )
+				$success_msg = "<font color='red'>Concept code '" . htmlspecialchars($map_code, ENT_QUOTES) . "' not found in vocabulary '" . htmlspecialchars($vocabulary, ENT_QUOTES) . "'.</font>";
+			elseif( !is_valid_map_target($concept) )
+				$success_msg = build_target_rejection_msg($pdo, $concept);
+			else
 			{
-				if( isset($ft_sheet["src_voc_name_$i"]) )
-					$sql .= "'" . $ft_sheet["src_voc_name_$i"] . "', '" . $sources_arr[$i]["code"] . "', '" . $sources_arr[$i]["description"] . "', ";
-				else
-					$sql .= "'', '', '', ";
+				$cols   = ["src_data_id"];
+				$values = [$data_id];
+				for( $i = 1 ; $i <= 6 ; $i++ )
+				{
+					array_push($cols, "source_vocabulary_id_$i", "source_code_$i", "source_code_description_$i");
+					if( isset($ft_sheet["src_voc_name_$i"]) && isset($sources_arr[$i]) )
+						array_push($values, $ft_sheet["src_voc_name_$i"], $sources_arr[$i]["code"], $sources_arr[$i]["description"]);
+					else
+						array_push($values, "", "", "");
+				}
+				array_push($cols, "target_concept_id", "target_concept_name", "target_vocabulary_id");
+				array_push($values, $concept["concept_id"], $concept["concept_name"], $vocabulary);
+
+				$stmt = $pdo->prepare(
+					"insert into phsa_all_maps (" . implode(", ", $cols) . ")
+					 values (" . implode(", ", array_fill(0, count($values), "?")) . ")"
+				);
+				$stmt->execute($values);
+				$map_id = $pdo->lastInsertId();
+				$action = "Add";
+				log_map_hx($pdo, $map_id, $action);
+
+				$sheet_domains = get_sheet_domains($pdo, $ft_data["sheet_id"]);
+				if( count($sheet_domains) && !in_array($concept["domain_id"], $sheet_domains) )
+					$success_msg = "Map added. <font color='#b06000'>Note: target domain '" . htmlspecialchars($concept["domain_id"], ENT_QUOTES) . "' is unusual for this sheet (expected: " . htmlspecialchars(implode(", ", $sheet_domains), ENT_QUOTES) . ").</font>";
 			}
-			$sql .= "concept_id, concept_name, '$vocabulary'
-					from omop_concept where concept_code = '$map_code' and vocabulary_id = '$vocabulary'";
-					
-			$rs = $pdo->query($sql);
-			$map_id = $pdo->lastInsertId();
-			$action = "Add";
-			log_map_hx($pdo, $map_id, $action);
+		}
+	}
+	elseif( isset($_POST["submit_propagate"]) && isset($_POST["prop_concept_id"]) && is_numeric($_POST["prop_concept_id"]) )
+	{
+		## PROPAGATE: apply one target to every identical unmapped term in this sheet
+		$concept = false;
+		$stmt = $pdo->prepare(
+			"select concept_id, concept_name, concept_code, domain_id, vocabulary_id, standard_concept, invalid_reason
+			 from omop_concept where concept_id = ?"
+		);
+		$stmt->execute([(int) $_POST["prop_concept_id"]]);
+		$concept = $stmt->fetch(PDO::FETCH_ASSOC);
+
+		if( !is_valid_map_target($concept) )
+			$success_msg = "<font color='red'>Cannot propagate a non-standard or invalid concept.</font>";
+		elseif( !check_vocabulary_valid($pdo, $ft_data["sheet_id"], $concept["vocabulary_id"]) )
+			$success_msg = "<font color='red'>Vocabulary '" . htmlspecialchars($concept["vocabulary_id"], ENT_QUOTES) . "' is not allowed for this sheet.</font>";
+		else
+		{
+			$src_desc = isset($sources_arr[1]) ? $sources_arr[1]["description"] : "";
+			$rows = find_unmapped_rows_for_description($pdo, $ft_data["sheet_id"], $src_desc);
+			$applied = 0;
+			foreach( $rows as $target_row )
+			{
+				$tgt_data_id = (int) $target_row["data_id"];
+				$tgt_sources = set_sources_arr($pdo, $tgt_data_id);
+
+				$cols   = ["src_data_id"];
+				$values = [$tgt_data_id];
+				for( $i = 1 ; $i <= 6 ; $i++ )
+				{
+					array_push($cols, "source_vocabulary_id_$i", "source_code_$i", "source_code_description_$i");
+					if( isset($ft_sheet["src_voc_name_$i"]) && isset($tgt_sources[$i]) )
+						array_push($values, $ft_sheet["src_voc_name_$i"], $tgt_sources[$i]["code"], $tgt_sources[$i]["description"]);
+					else
+						array_push($values, "", "", "");
+				}
+				array_push($cols, "target_concept_id", "target_concept_name", "target_vocabulary_id");
+				array_push($values, $concept["concept_id"], $concept["concept_name"], $concept["vocabulary_id"]);
+
+				$stmt = $pdo->prepare(
+					"insert into phsa_all_maps (" . implode(", ", $cols) . ")
+					 values (" . implode(", ", array_fill(0, count($values), "?")) . ")"
+				);
+				$stmt->execute($values);
+				log_map_hx($pdo, $pdo->lastInsertId(), "Add");
+				$applied++;
+			}
+			$action = ""; // suppress the sheet-counter block; counts recomputed separately
+			$success_msg = "Applied '" . htmlspecialchars($concept["concept_name"], ENT_QUOTES) . "' to <b>$applied</b> identical unmapped term(s) in this sheet.";
 		}
 	}
 	elseif( isset($_POST["exclude_status"]) && isset($_POST["comment_text"]) && isset($_POST["exclude_status_submit"]) )
@@ -439,7 +507,86 @@ echo "</table>";
 
 echo "<br/><br/>Comment:<br/><textarea name='comment_text' id='comment_text' cols='50' rows='5'>" . $ft_data["comment_text"] . "</textarea><br/><br/>";
 echo "<div align='right'><button name='submit_excl_update' id='submit_excl_update_btn' onclick=\"submit_excl_update($data_id);\">  Update  </button></div></td></tr></table>";
-	
+
+
+############# Duplicate-map propagation: has this exact term been mapped elsewhere?
+$panel_sheet_id  = (int) $ft_data["sheet_id"];
+$panel_kw        = isset($sources_arr[1]) ? $sources_arr[1]["description"] : "";
+$panel_domains   = get_sheet_domains($pdo, $panel_sheet_id);
+
+$existing_elsewhere = find_maps_for_description($pdo, $panel_kw, $data_id);
+$already_mapped_here = count($phsa_maps_arr) > 0;
+if( count($existing_elsewhere) )
+{
+	$unmapped_here = find_unmapped_rows_for_description($pdo, $panel_sheet_id, $panel_kw);
+	$unmapped_cnt  = count($unmapped_here);
+	?>
+	<div style='background-color:#fff6e0; border:1px solid #d0b060; margin:10px 40px; padding:15px;' align='left'>
+		<div style='font-size:16px; font-weight:bold; color:#875503;'>This term is mapped elsewhere</div>
+		<div style='font-size:11pt; margin:6px 0;'>&ldquo;<?php echo htmlspecialchars($panel_kw, ENT_QUOTES); ?>&rdquo; already has map(s) on other source rows:</div>
+		<table border='1' cellspacing='0' cellpadding='3' style='font-size:10pt; background-color:white;'>
+		<tr style='color:white; background-color:#875503;'><td>Target</td><td>Code</td><td>Vocabulary</td><td>Rows using it</td><td>Actions</td></tr>
+		<?php
+		foreach( $existing_elsewhere as $ex )
+		{
+			$valid = ($ex["standard_concept"] === "S" && is_null($ex["invalid_reason"]));
+			echo "<tr>";
+			echo "<td>" . htmlspecialchars((string) $ex["target_concept_name"], ENT_QUOTES) . ($valid ? "" : " <font color='red'>(non-standard)</font>") . "</td>";
+			echo "<td>" . htmlspecialchars((string) $ex["target_concept_code"], ENT_QUOTES) . "</td>";
+			echo "<td>" . htmlspecialchars((string) $ex["target_vocabulary_id"], ENT_QUOTES) . "</td>";
+			echo "<td>" . (int) $ex["used_count"] . "</td>";
+			echo "<td>";
+			if( $valid )
+			{
+				if( !$already_mapped_here )
+					echo "<button onclick=\"pick_concept('" . htmlspecialchars((string) $ex["target_concept_code"], ENT_QUOTES) . "', '" . htmlspecialchars((string) $ex["target_vocabulary_id"], ENT_QUOTES) . "')\">Use here</button>&nbsp;";
+				if( $unmapped_cnt > 0 )
+					echo "<button onclick=\"submit_propagate($data_id, " . (int) $ex["target_concept_id"] . ")\">Apply to $unmapped_cnt identical unmapped row(s)</button>";
+			}
+			else
+				echo "<i>blocked &mdash; not a standard target</i>";
+			echo "</td></tr>";
+		}
+		?>
+		</table>
+	</div>
+	<?php
+}
+
+############# Concept search panel (searches omop_concept + synonyms via search_concept.php)
+?>
+<div style='background-color:#eef4ff; border:1px solid #a0b0d0; margin:10px 40px; padding:15px;' align='left'>
+	<div style='font-size:16px; font-weight:bold; color:#202080;'>Find target concept</div>
+	<table border='0' cellpadding='4' style='font-size:11pt;'>
+	<tr>
+		<td>Search:</td>
+		<td><input type='text' id='concept_kw' size='50' maxlength='255' value='<?php echo htmlspecialchars($panel_kw, ENT_QUOTES); ?>'
+			onkeydown="if(event.key === 'Enter') concept_search(<?php echo $panel_sheet_id; ?>);" /></td>
+		<td>Domain:
+			<select id='concept_domain'>
+				<option value='all'>All</option>
+				<?php foreach( $panel_domains as $d ) echo "<option value='" . htmlspecialchars($d, ENT_QUOTES) . "'>" . htmlspecialchars($d, ENT_QUOTES) . "</option>"; ?>
+			</select>
+		</td>
+		<td>Vocabulary:
+			<select id='concept_vocab'>
+				<option value='sheet'>Sheet vocabularies</option>
+				<option value='all'>All</option>
+				<?php foreach( $shee_vocab_array as $v ) echo "<option value='" . htmlspecialchars($v, ENT_QUOTES) . "'>" . htmlspecialchars($v, ENT_QUOTES) . "</option>"; ?>
+			</select>
+		</td>
+		<td><label><input type='checkbox' id='concept_std' checked />&nbsp;Standard only</label></td>
+		<td><label><input type='checkbox' id='concept_valid' checked />&nbsp;Valid only</label></td>
+		<td><button onclick='concept_search(<?php echo $panel_sheet_id; ?>);'> Search </button></td>
+	</tr>
+	</table>
+	<div id='concept_results' style='margin-top:8px; max-height:320px; overflow-y:auto;'></div>
+</div>
+<script>
+if( $("#concept_kw").val() != "" )
+	concept_search(<?php echo $panel_sheet_id; ?>);
+</script>
+<?php
 
 echo "<p><br/></p><p><br/></p><h2>Change History</h2>";
 echo "<table border='1' cellpadding='3' cellspacing='0'><tr style='color:white; background-color:#202080;'>";

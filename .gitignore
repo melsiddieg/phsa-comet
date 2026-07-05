@@ -10,6 +10,10 @@ db/init/*.sql.gz
 # Cerner source extracts — internal org data, loaded at import time
 public/mr_data/
 
+# Athena vocabulary downloads (multi-GB, licensed) — drop zone for bin/load_vocab.php
+vocab_data/*
+!vocab_data/.gitkeep
+
 # Runtime artifacts written by the app
 public/error_log
 public/import_sql_log.txt

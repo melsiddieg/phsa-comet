@@ -1,0 +1,4 @@
+vocabulary_id	vocabulary_name	vocabulary_reference	vocabulary_version	vocabulary_concept_id
+None	OMOP Standardized Vocabularies	OMOP generated	v5.0 27-JUN-26	44819096
+SNOMED	Systematic Nomenclature of Medicine - Clinical Terms (IHTSDO)	http://www.snomed.org	2026-01-31 SNOMED CT International Edition	44819097
+LOINC	Logical Observation Identifiers Names and Codes (Regenstrief Institute)	http://loinc.org	2.80	44819102

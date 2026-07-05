@@ -83,7 +83,22 @@ function verify_session_vars()
 
 function verify_session($redirect = true, $return_url = "index.php")
 {
-	if (DEV_AUTH_BYPASS) return true;           // ← DEV shortcut
+	if (DEV_AUTH_BYPASS)                        // ← DEV shortcut
+	{
+		// Populate the session vars pages and audit logging rely on,
+		// otherwise privilege checks and log_map_hx() misbehave.
+		if( !isset($_SESSION["PHSA_UNAME"]) || $_SESSION["PHSA_UNAME"] == "" )
+		{
+			$_SESSION["PHSA_USER"]        = "Y";
+			$_SESSION["PHSA_UID"]         = "0";
+			$_SESSION["PHSA_UNAME"]       = "dev_bypass";
+			$_SESSION["PHSA_PRIV_MAP"]    = "1";
+			$_SESSION["PHSA_PRIV_REVIEW"] = "1";
+			$_SESSION["PHSA_PRIV_IMPORT"] = "1";
+			$_SESSION["PHSA_PRIV_ADMIN"]  = "1";
+		}
+		return true;
+	}
 
 	if(  !verify_session_vars() )
 	{	
@@ -318,6 +333,146 @@ function check_vocabulary_valid($pdo, $sheet_id, $vocabulary)
 	return true;
 }
 
+/**
+ * Look up a concept by code + vocabulary. Returns the row or false.
+ * (Prepared statement - safe for free-text codes.)
+ */
+function resolve_concept($pdo, $concept_code, $vocabulary_id)
+{
+	$stmt = $pdo->prepare(
+		"select concept_id, concept_name, concept_code, domain_id, vocabulary_id,
+				concept_class_id, standard_concept, invalid_reason, valid_end_date
+		 from omop_concept
+		 where concept_code = ? and vocabulary_id = ?"
+	);
+	$stmt->execute([$concept_code, $vocabulary_id]);
+	return $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+/**
+ * Standard, valid replacement candidates for a concept, resolved through the
+ * vocabulary's 'Maps to' / 'Concept replaced by' (and poss_eq/same_as)
+ * relationships. Used to guide mappers away from non-standard/deprecated
+ * targets (OHDSI practice: targets must be standard_concept='S' and valid).
+ */
+function get_standard_replacements($pdo, $concept_id)
+{
+	$stmt = $pdo->prepare(
+		"select distinct c2.concept_id, c2.concept_name, c2.concept_code, c2.domain_id, c2.vocabulary_id
+		 from omop_concept_relationship r
+		 join omop_concept c2 on c2.concept_id = r.concept_id_2
+		 where r.concept_id_1 = ?
+		   and r.relationship_id in ('Maps to', 'Concept replaced by', 'Concept poss_eq to', 'Concept same_as to')
+		   and c2.concept_id <> ?
+		   and c2.standard_concept = 'S'
+		   and c2.invalid_reason is null"
+	);
+	$stmt->execute([$concept_id, $concept_id]);
+	return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * True when the concept is a valid mapping target under CDM v5.4 rules.
+ */
+function is_valid_map_target($concept_row)
+{
+	return $concept_row
+		&& $concept_row["standard_concept"] === "S"
+		&& is_null($concept_row["invalid_reason"]);
+}
+
+/**
+ * Domains configured for a sheet (phsa_mr_sheet_domains); empty array = no
+ * restriction configured.
+ */
+function get_sheet_domains($pdo, $sheet_id)
+{
+	$stmt = $pdo->prepare("select domain_id from phsa_mr_sheet_domains where sheet_id = ?");
+	$stmt->execute([$sheet_id]);
+	return $stmt->fetchAll(PDO::FETCH_COLUMN);
+}
+
+/**
+ * Builds the red guardrail message (and clickable standard alternatives)
+ * shown when a mapper picks a non-standard or invalid target.
+ */
+function build_target_rejection_msg($pdo, $concept)
+{
+	$reason = !is_null($concept["invalid_reason"])
+		? "is no longer valid (invalid_reason = '" . htmlspecialchars($concept["invalid_reason"], ENT_QUOTES) . "')"
+		: "is not a standard concept";
+
+	$msg = "<font color='red'>Cannot map to <b>" . htmlspecialchars($concept["concept_name"], ENT_QUOTES)
+		 . "</b> (" . htmlspecialchars($concept["concept_code"], ENT_QUOTES) . ") &mdash; it $reason.</font>";
+
+	$alts = get_standard_replacements($pdo, $concept["concept_id"]);
+	if (count($alts)) {
+		$msg .= "<br/><font color='#000080'>Standard replacement" . (count($alts) > 1 ? "s" : "") . ": ";
+		foreach ($alts as $alt) {
+			$code  = htmlspecialchars($alt["concept_code"], ENT_QUOTES);
+			$vocab = htmlspecialchars($alt["vocabulary_id"], ENT_QUOTES);
+			$name  = htmlspecialchars($alt["concept_name"], ENT_QUOTES);
+			$msg  .= "<a href='javascript:void(0)' onclick=\"pick_concept('$code', '$vocab')\" style='text-decoration:underline;'>$name ($code, $vocab)</a>&nbsp;&nbsp;";
+		}
+		$msg .= "</font>";
+	} else {
+		$msg .= "<br/><font color='#000080'>No standard replacement found in the vocabulary &mdash; consider the SDO Submission status.</font>";
+	}
+	return $msg;
+}
+
+/**
+ * Existing maps on OTHER data rows whose spot-1 source description matches the
+ * given description (normalized: trimmed + case-insensitive). Lets a mapper
+ * reuse a decision already made for an identical term elsewhere.
+ */
+function find_maps_for_description($pdo, $description, $exclude_data_id)
+{
+	$norm = strtolower(trim($description));
+	if( $norm === "" )
+		return array();
+
+	$stmt = $pdo->prepare(
+		"select m.target_concept_id, m.target_concept_name, m.target_vocabulary_id,
+				c.concept_code as target_concept_code, c.standard_concept, c.invalid_reason,
+				count(distinct m.src_data_id) as used_count
+		 from phsa_all_maps m
+		 left join omop_concept c on c.concept_id = m.target_concept_id
+		 where lower(trim(m.source_code_description_1)) = ?
+		   and m.src_data_id <> ?
+		 group by m.target_concept_id, m.target_concept_name, m.target_vocabulary_id,
+				  c.concept_code, c.standard_concept, c.invalid_reason
+		 order by used_count desc"
+	);
+	$stmt->execute([$norm, $exclude_data_id]);
+	return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * Unmapped data rows in a sheet whose spot-1 source description matches the
+ * given description (normalized). Target of the "apply to all identical
+ * unmapped terms" batch action. Returns rows of [data_id, code, description].
+ */
+function find_unmapped_rows_for_description($pdo, $sheet_id, $description)
+{
+	$norm = strtolower(trim($description));
+	if( $norm === "" )
+		return array();
+
+	$stmt = $pdo->prepare(
+		"select d.id as data_id, s.code, s.description
+		 from phsa_mr_data d
+		 join phsa_mr_data_src_cd_desc s on s.data_id = d.id and s.spot = 1
+		 where d.sheet_id = ?
+		   and lower(trim(s.description)) = ?
+		   and ifnull(d.exclude, '') = ''
+		   and not exists (select 1 from phsa_all_maps m where m.src_data_id = d.id)
+		 order by d.id"
+	);
+	$stmt->execute([$sheet_id, $norm]);
+	return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
 function check_map_against_data($pdo, $map_id, $data_id)
 {
 	$sql = "select src_data_id from phsa_all_maps where id=$map_id";
@@ -342,17 +497,19 @@ function log_map_hx($pdo, $map_id, $action, $before_update_target_concept_id = '
 											source_vocabulary_id_4, source_code_4, source_code_description_4, 
 											source_vocabulary_id_5, source_code_5, source_code_description_5, 
 											source_vocabulary_id_6, source_code_6, source_code_description_6, 
-											target_concept_id, date_time, username, change_action,
-											before_update_target_concept_id) 
-			select 
-				id, src_data_id, 
-				source_vocabulary_id_1, source_code_1, source_code_description_1, 
-				source_vocabulary_id_2, source_code_2, source_code_description_2, 
-				source_vocabulary_id_3, source_code_3, source_code_description_3, 
-				source_vocabulary_id_4, source_code_4, source_code_description_4, 
-				source_vocabulary_id_5, source_code_5, source_code_description_5, 
-				source_vocabulary_id_6, source_code_6, source_code_description_6, 
-				target_concept_id, now(), '" . $_SESSION["PHSA_UNAME"] . "', '$action',
+											target_concept_id, target_concept_name, target_vocabulary_id,
+											date_time, username, change_action,
+											before_update_target_concept_id)
+			select
+				id, src_data_id,
+				source_vocabulary_id_1, source_code_1, source_code_description_1,
+				source_vocabulary_id_2, source_code_2, source_code_description_2,
+				source_vocabulary_id_3, source_code_3, source_code_description_3,
+				source_vocabulary_id_4, source_code_4, source_code_description_4,
+				source_vocabulary_id_5, source_code_5, source_code_description_5,
+				source_vocabulary_id_6, source_code_6, source_code_description_6,
+				target_concept_id, ifnull(target_concept_name, ''), ifnull(target_vocabulary_id, ''),
+				now(), '" . $_SESSION["PHSA_UNAME"] . "', '$action',
 				'$before_update_target_concept_id'
 			from phsa_all_maps
 			where id = $map_id;
