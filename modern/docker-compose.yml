@@ -37,7 +37,8 @@ services:
     volumes:
       - .:/var/www/html
       - ../public/mr_data:/var/www/mr_data:ro   # legacy Cerner extracts for the import pipeline
-      - ../vocab_data:/var/www/vocab_data:ro    # Athena downloads for the vocab loader
+      - ../vocab_data:/var/www/vocab_data      # Athena downloads + converter output (*_CUSTOM.csv)
+      - ../db/fixtures:/var/www/fixtures:ro     # dev fixtures (CIHI/Athena samples)
     depends_on:
       db:
         condition: service_healthy

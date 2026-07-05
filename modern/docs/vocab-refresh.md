@@ -181,9 +181,39 @@ staged concept sits in `[1e9, 2e9)` (a sign a custom id wasn't lifted into the
 `*_CUSTOM.csv` files there add an ICD-10-CA concept mapping to the standard
 SNOMED hypertension concept).
 
+### Converters (CIHI/Infoway → `*_CUSTOM.csv`)
+
+Rather than hand-authoring the `*_CUSTOM.csv`, convert a licensed distribution
+with the built-in commands. They allocate **stable** 2-billion ids via the
+`custom_concept_ids` registry (re-runs produce identical ids, so maps stay
+valid across releases) and emit header rows (the loader reads `*_CUSTOM.csv`
+with `HEADER true`).
+
+```bash
+# classification -> concept + FR synonyms + vocabulary CSVs
+#   input is a normalized TSV (convert the real, licensed file to this first):
+#     icd10ca|cci : code<TAB>name_en<TAB>name_fr(optional)
+#     snomedca    : code<TAB>name_en<TAB>domain<TAB>name_fr(optional)   (standard)
+#     pclocd      : code<TAB>name_en<TAB>name_fr(optional)              (source)
+docker compose exec app php artisan comet:convert-cihi icd10ca /var/www/vocab_data/cihi/icd10ca.tsv /var/www/vocab_data/athena_2026q2
+
+# CIHI SNOMED CT-CA map refset (snomed_code<TAB>canadian_code) -> Maps-to rows.
+# Resolves the SNOMED code to a *standard* concept already loaded from Athena
+# and the Canadian code to its registry id; unresolved pairs go to
+# cihi_maps_review.tsv for manual attention.
+docker compose exec app php artisan comet:convert-cihi-maps ICD10CA /var/www/vocab_data/cihi/refset.tsv /var/www/vocab_data/athena_2026q2
+```
+
+Write the output straight into the same directory as the Athena download, then
+`comet:load-vocab` that directory. (Run `convert-cihi` before
+`convert-cihi-maps`, and `convert-cihi-maps` after the SNOMED Athena vocabulary
+is loaded, so the standard targets resolve.) A worked fixture is
+`db/fixtures/cihi_sample/`.
+
 Notes:
 - Keep the licensed raw files under `vocab_data/` (git-ignored) — do not commit
   CIHI/Infoway/Health-Canada content.
+- Every `*_CUSTOM.csv` (hand-made or converter-produced) must carry a header row.
 - Add each custom `vocabulary_id` (e.g. `ICD10CA`) to the relevant sheet's
   allowed vocabularies (`sheet_vocabularies`) so mappers can select it.
 - Because the custom rows ride the atomic swap, keep the `*_CUSTOM.csv` files in
