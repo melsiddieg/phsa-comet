@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\SheetController;
+use App\Livewire\MappingGrid;
 use Illuminate\Support\Facades\Route;
 
 // ── Auth ────────────────────────────────────────────────────────────
@@ -17,4 +19,8 @@ Route::post('/logout', [AuthController::class, 'logout'])
 // ── App ─────────────────────────────────────────────────────────────
 Route::middleware('auth')->group(function () {
     Route::view('/', 'home')->name('home');
+
+    Route::get('/sheets', [SheetController::class, 'sourceIndex'])->name('sheets.index');
+    Route::get('/domains', [SheetController::class, 'domainIndex'])->name('domains.index');
+    Route::get('/sheets/{sheet}', MappingGrid::class)->name('sheets.show');
 });

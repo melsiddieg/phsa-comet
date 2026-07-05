@@ -2,8 +2,13 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 
+/**
+ * @property-read Collection<int, SheetSourceColumn> $sourceColumns
+ * @property-read Collection<int, SheetAttribute> $sheetAttributes
+ */
 class Sheet extends Model
 {
     protected $table = 'sheets';

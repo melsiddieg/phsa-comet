@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>@yield('title', 'COMET')</title>
+    <title>{{ $title ?? 'COMET' }}</title>
     <link rel="icon" href="{{ asset('favicon.ico') }}">
     @include('partials.styles')
     @livewireStyles
@@ -11,7 +11,7 @@
 <body>
 @include('partials.chrome')
 <main>
-    @yield('content')
+    {{ $slot }}
 </main>
 @livewireScripts
 </body>
