@@ -1,9 +1,12 @@
 <?php
 
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\ExportController;
 use App\Http\Controllers\SheetController;
 use App\Livewire\ImportManager;
+use App\Livewire\ReleasesAdmin;
 use App\Livewire\ReviewQueue;
+use App\Livewire\UserAdmin;
 use App\Livewire\MappingGrid;
 use Illuminate\Support\Facades\Route;
 
@@ -27,4 +30,11 @@ Route::middleware('auth')->group(function () {
     Route::get('/sheets/{sheet}', MappingGrid::class)->name('sheets.show');
     Route::get('/import', ImportManager::class)->name('import');
     Route::get('/review', ReviewQueue::class)->name('review');
+
+    Route::get('/export/stcm', [ExportController::class, 'stcm'])->name('export.stcm');
+    Route::get('/export/stcm/{release}', [ExportController::class, 'stcm'])->name('export.stcm.release')->whereNumber('release');
+    Route::get('/export/exclusions', [ExportController::class, 'exclusions'])->name('export.exclusions');
+
+    Route::get('/admin/releases', ReleasesAdmin::class)->name('admin.releases');
+    Route::get('/admin/users', UserAdmin::class)->name('admin.users');
 });
