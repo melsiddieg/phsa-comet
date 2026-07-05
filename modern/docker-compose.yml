@@ -11,6 +11,8 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/pg_app_pw
     volumes:
       - pg_data:/var/lib/postgresql/data
+      - ../vocab_data:/vocab_data:ro    # Athena downloads (server-side COPY)
+      - ../db/fixtures:/fixtures:ro     # dev vocabulary fixture
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U comet_app -d comet"]
       interval: 5s
