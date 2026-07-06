@@ -87,9 +87,18 @@ fixture**. Load real data next.
 2. Load it (staged, atomic swap):
    ```bash
    podman exec comet_modern_app php artisan comet:load-vocab /vocab_data/<dir> --by="you"
+   podman exec comet_modern_app php artisan comet:vocab-status --search="a term"  # verify
    ```
-3. Full procedure + Canadian extensions (ICD-10-CA/CCI/SNOMED-CA/pCLOCD via the
-   `comet:convert-cihi` converters): **`modern/docs/vocab-refresh.md`**.
+3. Full procedure, **testing with a small real subset first**, and Canadian
+   extensions (ICD-10-CA/CCI/SNOMED-CA/pCLOCD via the `comet:convert-cihi`
+   converters): **`modern/docs/vocab-refresh.md`**.
+
+   > **Just want to confirm it works?** Download only a few *small*
+   > vocabularies from Athena (e.g. `CMS Place of Service`, `Medicare Specialty`,
+   > `NUCC`, optionally `LOINC`; skip SNOMED/RxNorm/NDC/CPT4). Under ~500 MB, and
+   > it exercises search, domain view, impact report, auto-map, and the Canadian
+   > converters end to end. See the "Testing with a small real sample" section in
+   > `modern/docs/vocab-refresh.md`.
 
 **C. Precompute candidates** once vocab + terms are in:
 ```bash

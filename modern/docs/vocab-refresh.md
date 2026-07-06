@@ -77,6 +77,41 @@ vocabulary's `Concept replaced by` / `Maps to` relationships. Remap or send each
 to the Question queue — per OHDSI practice, maps should only point at concepts
 that are standard and valid in the *current* release.
 
+## Testing with a small real sample (before the full download)
+
+To validate the whole pipeline against *real* OMOP concepts without a multi-GB
+download, select just a few **small** vocabularies on Athena:
+
+1. On <https://athena.ohdsi.org> → **Download**, tick a small, COMET-relevant
+   set and **leave the big ones unchecked**:
+   - **Include:** `CMS Place of Service`, `Medicare Specialty`, `NUCC`
+     (tiny, and actually used by several sheets — see `sheet_vocabularies`),
+     plus `LOINC` if you want a moderate table to exercise ranking. The
+     metadata vocabularies (`None`, `Gender`, `Race`, `Ethnicity`, `Visit`) come
+     along automatically and are tiny.
+   - **Exclude:** `SNOMED`, `RxNorm`, `RxNorm Extension`, `NDC`, `ICD10CM` (large)
+     and **`CPT4`** (it needs the extra UMLS-key `cpt.sh` step — skip it for a
+     sample). This selection unzips to well under ~500 MB.
+   - Optionally include `CONCEPT_ANCESTOR` to test hierarchy browsing — small for
+     this set.
+2. Unzip into `vocab_data/<dir>/` and load:
+   ```bash
+   docker compose exec app php artisan comet:load-vocab /vocab_data/<dir> --by=sample
+   ```
+3. **Verify it worked:**
+   ```bash
+   docker compose exec app php artisan comet:vocab-status --search="place of service"
+   ```
+   This prints the release, per-vocabulary concept counts, confirms the search
+   indexes are built, whether the hierarchy loaded, and runs a live sample
+   query. Then `comet:auto-map --all` and open the app.
+
+Note: the Cerner sheets that map to **SNOMED** won't have real candidates until
+SNOMED is loaded (the large one). Everything else — search, the domain view, the
+impact report, auto-map, the Canadian converters — is fully exercised by
+whatever vocabularies you load, so this sample is enough to confirm the system
+works end to end.
+
 ## How versioning is handled
 
 - **`vocab_meta`** is the ledger. Every `comet:load-vocab` run inserts a row:
