@@ -2,7 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## What this is
+## ⚠️ Two apps live here — new work is in `modern/`
+
+- **`modern/`** is the active app: a **Laravel 12 + PostgreSQL 16 rebuild** (SSO, tests, Livewire, OMOP-native). All ongoing development happens here. Its own docs: `modern/README.md`, `modern/docs/`.
+- **`public/`** is the **legacy** procedural-PHP app it replaces — kept runnable for reference/parity during transition.
+- **Resuming the project (esp. on a new machine)? Read [`RESUME.md`](RESUME.md) first** — it covers fresh-machine bring-up, the git-ignored data you must bring (Athena vocab, legacy dump, Cerner extracts, secrets/.env), and the roadmap.
+
+The rest of this file documents the **legacy** app.
+
+## What this is (legacy app)
 
 COMET (Central Online Mapping and Export Tool) — a legacy procedural PHP 8.2 web app for PHSA that maps Cerner source terminology ("MR sheets") to OMOP standard concepts. No framework, no Composer, no tests, no linter. All application code lives in `public/`, which is also the web document root.
 
