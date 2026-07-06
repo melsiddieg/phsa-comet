@@ -82,8 +82,23 @@ fixture**. Load real data next.
   **Import** UI (importer role) per sheet — queued, tracked in `import_runs`.
 
 **B. The OMOP vocabulary (do this first for real testing):**
+
+*Fastest real-vocab smoke test — no Athena account* (this is what's loaded on the
+dev machine right now): the public OHDSI **Eunomia GiBleed** dataset via
+`bin/eunomia_to_athena.py`. ~450 real concepts + 65k-row hierarchy, loads in
+seconds. See "Quickest real-vocabulary test: OHDSI Eunomia" in
+`modern/docs/vocab-refresh.md`.
+
+For real coverage:
 1. Download from <https://athena.ohdsi.org> (SNOMED, LOINC, RxNorm, UCUM, the
    sheet vocabularies…). Unzip into `vocab_data/<dir>/`.
+   - *Staging on a NAS / external volume* (e.g. `/Volumes/mac_mini/vocab`): fine
+     for the raw download, but on macOS the Podman VM can't read an SMB mount, so
+     copy the subset's CSVs into the repo's `vocab_data/` to load. Note the real
+     cap is **internal** disk (Postgres stores loaded concepts+indexes in its VM
+     volume) — a small sample fits a tight disk, a full vocab needs tens of GB
+     *internal*. See "Storing downloads on an external / NAS volume" in
+     `modern/docs/vocab-refresh.md`.
 2. Load it (staged, atomic swap):
    ```bash
    podman exec comet_modern_app php artisan comet:load-vocab /vocab_data/<dir> --by="you"

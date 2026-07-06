@@ -77,6 +77,74 @@ vocabulary's `Concept replaced by` / `Maps to` relationships. Remap or send each
 to the Question queue — per OHDSI practice, maps should only point at concepts
 that are standard and valid in the *current* release.
 
+## Storing downloads on an external / NAS volume
+
+Two *separate* storage needs, often confused:
+
+- **The raw Athena download** (multi-GB zip + extracted CSVs) — stage this
+  anywhere with room, e.g. a NAS.
+- **The loaded data** — Postgres stores concepts + the GIN search indexes in its
+  `pg_data` volume, which lives on the **container engine's disk** (on macOS,
+  inside the Podman/Docker VM, backed by your *internal* drive). This is the
+  real cap: a full vocabulary needs tens of GB *there*, no matter where the
+  download sits.
+
+**macOS + Podman gotcha:** the Podman VM can only bind-mount host paths shared
+with the machine (your home dir by default). A **NAS/SMB mount under `/Volumes`
+is NOT visible to the VM**, so `comet:load-vocab`'s server-side `COPY` can't read
+it directly. Workflow that works:
+
+```bash
+# 1. Download + unzip onto the roomy volume (e.g. NAS)
+#    /Volumes/mac_mini/vocab/athena_sample/{CONCEPT,CONCEPT_SYNONYM,...}.csv
+
+# 2. Stage just the CSVs you're loading into the repo's vocab_data/ (which IS
+#    mounted into the containers). A small subset is only a few hundred MB.
+mkdir -p vocab_data/athena_sample
+cp /Volumes/mac_mini/vocab/athena_sample/*.csv vocab_data/athena_sample/
+
+# 3. Load, then reclaim the local copy (the loaded data stays in Postgres)
+docker compose exec app php artisan comet:load-vocab /vocab_data/athena_sample --by=sample
+docker compose exec app php artisan comet:vocab-status --search="a term"
+rm -rf vocab_data/athena_sample     # raw CSVs remain safe on the NAS
+```
+
+If your **internal** disk is tight (e.g. only ~10 GB free in the VM), you can
+still load a **small sample** (below) but **not** a full vocabulary — the loaded
+concepts + indexes won't fit. Do the full load on a machine with more *internal*
+storage. Storing Postgres data itself on an SMB/NAS volume is **not
+recommended** (locking/corruption, slow).
+
+## Quickest real-vocabulary test: OHDSI Eunomia (no Athena account)
+
+The public **Eunomia** CDM datasets carry a small slice of the *real* OMOP
+vocabulary — enough to validate the whole pipeline in seconds. No license or
+account needed. `GiBleed` has ~450 concepts (SNOMED/RxNorm/LOINC/CVX/ICD10CM),
+1k synonyms, and a 65k-row hierarchy.
+
+```bash
+# 1. Download + unzip anywhere with room (e.g. the NAS)
+curl -sL -o GiBleed.zip \
+  https://raw.githubusercontent.com/OHDSI/EunomiaDatasets/main/datasets/GiBleed/GiBleed_5.3.zip
+unzip -q GiBleed.zip -d GiBleed
+
+# 2. Convert Eunomia's format (CSV, quoted, ISO dates) to Athena's (TSV,
+#    header, YYYYMMDD) straight into the container-visible vocab_data/
+python3 bin/eunomia_to_athena.py GiBleed/GiBleed_5.3 vocab_data/eunomia_sample
+
+# 3. Load + verify
+docker compose exec app php artisan comet:load-vocab /vocab_data/eunomia_sample --by=eunomia
+docker compose exec app php artisan comet:vocab-status --search="gastrointestinal hemorrhage"
+docker compose exec app php artisan comet:auto-map --all --sync
+```
+
+Verified end to end with this dataset: search ranks correctly (exact
+`celecoxib` → 1.0; typo `hemorrage stomach` → *Gastrointestinal hemorrhage* via
+synonym), all four search indexes build, the hierarchy loads, and auto-map
+produces real candidates (a `Coronary arteriosclerosis` source term → the exact
+SNOMED concept). Great for local dev and CI; use a real Athena download for
+production coverage.
+
 ## Testing with a small real sample (before the full download)
 
 To validate the whole pipeline against *real* OMOP concepts without a multi-GB
