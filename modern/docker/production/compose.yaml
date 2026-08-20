@@ -1,0 +1,165 @@
+# COMET — production Docker Compose stack
+#
+#   cd modern
+#   docker compose -f docker/production/compose.yaml --env-file .env.production up -d
+#
+# Requires Docker Compose v2.20+ (tested on v2.26.1). The top-level `version:`
+# key is intentionally absent — it is obsolete in Compose v2 and emits a warning.
+#
+# Services: db (Postgres 16) · redis · migrate (one-shot) · app · queue
+name: comet
+
+x-app-image: &app-image
+  build:
+    context: ../..
+    dockerfile: docker/production/Dockerfile
+  image: ${COMET_IMAGE:-comet:latest}
+
+# Every PHP container gets the same configuration.
+x-app-env: &app-env
+  APP_NAME: COMET
+  APP_ENV: production
+  APP_DEBUG: "false"
+  APP_KEY: ${APP_KEY:?APP_KEY is required - see README}
+  APP_URL: ${APP_URL:-http://localhost:8080}
+
+  DB_CONNECTION: pgsql
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_DATABASE: ${DB_DATABASE:-comet}
+  DB_USERNAME: ${DB_USERNAME:-comet_app}
+  # DB_PASSWORD deliberately unset: config/database.php falls back to the
+  # /run/secrets/pg_app_pw file, keeping the password out of the environment.
+
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  CACHE_STORE: redis
+  QUEUE_CONNECTION: redis
+  SESSION_DRIVER: database
+
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: ${LOG_LEVEL:-warning}
+
+  # Entra ID SSO (leave blank to keep break-glass login enabled)
+  AUTH_LOCAL_LOGIN: ${AUTH_LOCAL_LOGIN:-0}
+  ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
+  ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET:-}
+  ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
+
+x-app-common: &app-common
+  restart: unless-stopped
+  secrets: [pg_app_pw]
+  networks: [comet]
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-comet}
+      POSTGRES_USER: ${DB_USERNAME:-comet_app}
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_app_pw
+      # Vocabulary loads are large; give Postgres room to sort/index.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command: >
+      postgres
+      -c max_wal_size=4GB
+      -c maintenance_work_mem=512MB
+      -c work_mem=32MB
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ${VOCAB_DATA_DIR:-../../../vocab_data}:/vocab_data:ro   # server-side COPY
+      - ./backups:/backups
+    secrets: [pg_app_pw]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-comet_app} -d ${DB_DATABASE:-comet}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [comet]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [comet]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  # One-shot: runs migrations, exits 0. app/queue wait for it to finish, so
+  # migrations never race across replicas.
+  migrate:
+    <<: [*app-image, *app-common]
+    restart: "no"
+    environment:
+      <<: *app-env
+      CONTAINER_ROLE: migrate
+    depends_on:
+      db: {condition: service_healthy}
+
+  app:
+    <<: [*app-image, *app-common]
+    environment:
+      <<: *app-env
+      CONTAINER_ROLE: app
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    volumes:
+      - app_storage:/var/www/html/storage/app
+      - ${VOCAB_DATA_DIR:-../../../vocab_data}:/var/www/vocab_data
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:8080/up || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  queue:
+    <<: [*app-image, *app-common]
+    environment:
+      <<: *app-env
+      CONTAINER_ROLE: queue
+    volumes:
+      - app_storage:/var/www/html/storage/app
+      - ${VOCAB_DATA_DIR:-../../../vocab_data}:/var/www/vocab_data
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'queue:work' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+secrets:
+  pg_app_pw:
+    file: ${PG_PASSWORD_FILE:-../../../secrets/pg_app_pw.txt}
+
+volumes:
+  pg_data: {}
+  redis_data: {}
+  app_storage: {}
+
+networks:
+  comet:
+    driver: bridge
