@@ -1,0 +1,161 @@
+name: Deploy to Azure
+
+# Production deploys are deliberate, not automatic: either push a release tag
+# (v1.2.3) or run the workflow manually. Every deploy re-runs the test suite
+# against the exact commit being shipped.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      run_migrations:
+        description: 'Run database migrations on deploy'
+        type: boolean
+        default: true
+
+# Never let two deploys race for the same Container App.
+concurrency:
+  group: deploy-azure
+  cancel-in-progress: false
+
+permissions:
+  id-token: write      # OIDC federated login to Azure — no stored credentials
+  contents: read
+
+env:
+  REGISTRY: ${{ vars.ACR_NAME }}.azurecr.io
+  IMAGE: comet
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  APP_NAME: ${{ vars.AZURE_APP_NAME }}
+  QUEUE_NAME: ${{ vars.AZURE_QUEUE_NAME }}
+
+jobs:
+  test:
+    name: Verify commit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: modern
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: intl, pdo_pgsql, pdo_sqlite, zip
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Static analysis (Larastan)
+        run: vendor/bin/phpstan analyse --memory-limit=1G
+
+      - name: Tests
+        run: php artisan test
+        env:
+          DB_CONNECTION: sqlite
+          DB_DATABASE: ':memory:'
+
+  build:
+    name: Build & push image
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        run: az acr login --name ${{ vars.ACR_NAME }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: modern
+          file: modern/docker/production/Dockerfile
+          platforms: linux/amd64   # Container Apps is amd64-only
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy Container Apps
+    needs: build
+    runs-on: ubuntu-latest
+    # Requires a GitHub Environment named "production" — add required
+    # reviewers there to gate deploys behind an approval.
+    environment: production
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # The web app carries RUN_MIGRATIONS so migrations run exactly once,
+      # from a single container, before the queue workers pick up new code.
+      - name: Deploy web app
+        run: |
+          az containerapp update \
+            --name "$APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY/$IMAGE:${{ needs.build.outputs.tag }}" \
+            --set-env-vars \
+              CONTAINER_ROLE=app \
+              RUN_MIGRATIONS=${{ github.event_name == 'workflow_dispatch' && inputs.run_migrations == false && '0' || '1' }}
+
+      - name: Wait for web app to be healthy
+        run: |
+          az containerapp revision list \
+            --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --query "[?properties.active].{name:name,healthy:properties.healthState}" -o table
+          for i in $(seq 1 30); do
+            state=$(az containerapp revision list \
+              --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+              --query "[?properties.active] | [0].properties.healthState" -o tsv)
+            echo "attempt $i: $state"
+            [ "$state" = "Healthy" ] && exit 0
+            sleep 10
+          done
+          echo "::error::Web app did not become healthy in 5 minutes"
+          exit 1
+
+      # Queue workers deploy only after the web app is healthy — so a bad
+      # image is caught before it reaches the workers.
+      - name: Deploy queue worker
+        run: |
+          az containerapp update \
+            --name "$QUEUE_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY/$IMAGE:${{ needs.build.outputs.tag }}" \
+            --set-env-vars CONTAINER_ROLE=queue RUN_MIGRATIONS=0
+
+      - name: Smoke test
+        run: |
+          fqdn=$(az containerapp show --name "$APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          echo "Checking https://$fqdn/up"
+          curl -fsS --retry 5 --retry-delay 5 "https://$fqdn/up"
+          echo "Deployed ${{ needs.build.outputs.tag }} to https://$fqdn"
