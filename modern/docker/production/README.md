@@ -14,7 +14,7 @@ work unchanged on 22.04/24.04 and, with the noted package swap, on RHEL 9.
 |---|------|------|
 | 1 | [Prepare the VM](#prepare-the-vm) — Docker, firewall, disk | ~10 min |
 | 2 | [Quick start](#quick-start) — secrets, env, build, first admin | ~15 min |
-| 3 | [TLS with a real domain](#tls-with-a-real-domain) — Caddy + Let's Encrypt | ~5 min |
+| 3 | [TLS and port 80](#tls-and-port-80) — proxy / certificates | ~5 min |
 | 4 | [Run at boot](#run-at-boot-systemd) — systemd unit, reboot test | ~5 min |
 | 5 | [Loading data](#loading-data) — vocabulary and source terms | hours |
 | 6 | [Security checklist](#security-checklist) — before real data | ~10 min |
@@ -30,7 +30,7 @@ load time.
 2. [Requirements](#requirements)
 3. [Prepare the VM](#prepare-the-vm)
 4. [Quick start](#quick-start)
-5. [TLS with a real domain](#tls-with-a-real-domain)
+5. [TLS and port 80](#tls-and-port-80)
 6. [Run at boot (systemd)](#run-at-boot-systemd)
 7. [Configuration](#configuration)
 8. [Loading data](#loading-data)
@@ -343,34 +343,53 @@ The rest of this README uses `comet` to mean exactly that.
 
 ---
 
-## TLS with a real domain
+## TLS and port 80
 
-The stack serves **plain HTTP on 8080**. Never expose that to the internet.
-On a standalone VM the simplest correct answer is the bundled Caddy overlay:
-it obtains and renews Let's Encrypt certificates automatically.
+The stack serves **plain HTTP on 8080** and must sit behind something that
+terminates TLS. Which option you want depends entirely on what already owns
+port 80 on this VM. Find out first:
 
-### 1. Point DNS at the VM
+```bash
+sudo ss -lptn 'sport = :80'                  # what is listening
+docker ps --format '{{.Names}}\t{{.Ports}}'   # is it a container?
+```
 
-Create an `A` record (and `AAAA` if you have IPv6) for your hostname pointing
-at the VM's public IP. Verify it resolves **before** starting Caddy — a failed
-ACME challenge counts against Let's Encrypt rate limits:
+| What you find | Use | Section |
+|---|---|---|
+| Nothing on 80/443 | bundled Caddy, automatic certs | [A](#a-nothing-else-on-80443--bundled-caddy) |
+| **Another _container_ owns 80** (Traefik, nginx-proxy, another stack) | share its network, publish no ports | [B](#b-another-container-already-owns-80) |
+| A **host** nginx/Apache owns 80 | bind to loopback, `proxy_pass` | [C](#c-a-host-nginx--apache-owns-80) |
+| The VM has a **second IP** free | bind Caddy to that IP | [D](#d-a-spare-ip-is-available) |
+
+Whichever you pick, set the public URL:
+
+```bash
+# .env.production
+APP_URL=https://comet.example.org
+```
+
+---
+
+### A. Nothing else on 80/443 — bundled Caddy
+
+Caddy obtains and renews Let's Encrypt certificates automatically.
+
+**1. Point DNS at the VM** and verify *before* starting — a failed ACME
+challenge counts against Let's Encrypt rate limits:
 
 ```bash
 dig +short comet.example.org      # must print this VM's public IP
 ```
 
-### 2. Add the TLS settings
-
-In `.env.production`:
+**2. Configure** in `.env.production`:
 
 ```bash
 COMET_DOMAIN=comet.example.org
 ACME_EMAIL=ops@example.org
-APP_URL=https://comet.example.org
 HTTP_PORT=127.0.0.1:8080      # stop publishing the app publicly
 ```
 
-### 3. Start with the overlay
+**3. Start with the overlay:**
 
 ```bash
 docker compose \
@@ -379,31 +398,86 @@ docker compose \
   --env-file .env.production up -d
 ```
 
-Caddy takes ports 80 and 443, proxies to `app:8080` over the internal network,
-and issues a certificate on first request. Watch it happen:
-
-```bash
-docker compose -f docker/production/compose.yaml \
-               -f docker/production/compose.caddy.yaml \
-               --env-file .env.production logs -f caddy
-curl -I https://comet.example.org/up
-```
-
-> Certificates live in the `caddy_data` volume. **Do not delete that volume** —
-> re-issuing repeatedly will hit Let's Encrypt rate limits (5 duplicate
+> Certificates live in the `caddy_data` volume. **Do not delete it** —
+> re-issuing repeatedly hits Let's Encrypt rate limits (5 duplicate
 > certificates per week).
 
-Because the overlay is a second `-f`, every later command needs both files.
-Fold that into the alias:
+---
+
+### B. Another container already owns 80
+
+This is the common case on a shared VM. Do **not** use the Caddy overlay —
+it would fight for port 80. Instead COMET publishes **no host ports at all**
+and the existing proxy reaches it over a shared Docker network.
+
+**1. Find the proxy's network:**
 
 ```bash
-alias comet='docker compose -f docker/production/compose.yaml -f docker/production/compose.caddy.yaml --env-file .env.production'
+docker ps                                  # identify the proxy container
+docker inspect -f '{{range $n,$_ := .NetworkSettings.Networks}}{{$n}} {{end}}' <proxy-container>
 ```
 
-### Using an existing proxy instead
+Typical names: `web`, `proxy`, `traefik_default`, `nginx-proxy_default`.
 
-If the VM already runs nginx/HAProxy, skip the overlay, keep
-`HTTP_PORT=127.0.0.1:8080`, and proxy to it:
+**2. Configure** in `.env.production`:
+
+```bash
+PROXY_NETWORK=web                      # the network you just found
+COMET_DOMAIN=comet.example.org
+APP_URL=https://comet.example.org
+```
+
+**3. Start with the proxy overlay:**
+
+```bash
+docker compose \
+  -f docker/production/compose.yaml \
+  -f docker/production/compose.proxy.yaml \
+  --env-file .env.production up -d
+```
+
+COMET is now reachable **only** from that network, as host `app` port `8080`.
+
+**4. Tell the existing proxy about it.** How depends on which proxy it is —
+`compose.proxy.yaml` has ready-made label blocks for Traefik and
+nginx-proxy; uncomment the one that matches. For a plain Caddy or nginx
+container, add a route pointing at `app:8080`:
+
+```caddy
+# existing Caddy container's Caddyfile
+comet.example.org {
+    reverse_proxy app:8080
+}
+```
+
+```nginx
+# existing nginx container's config
+location / {
+    proxy_pass http://app:8080;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+> The proxy container must be attached to `PROXY_NETWORK` too — that is how
+> it resolves the name `app`. If it cannot, `docker network connect
+> <network> <proxy-container>` fixes it.
+>
+> **Name collision:** the service is called `app`, which is generic. If the
+> other stack also has an `app` on that network, DNS is ambiguous — add a
+> network alias (e.g. `comet-app`) and point the proxy at that instead.
+
+---
+
+### C. A host nginx / Apache owns 80
+
+Keep the app on loopback and proxy to it from the host:
+
+```bash
+# .env.production
+HTTP_PORT=127.0.0.1:8080
+```
 
 ```nginx
 server {
@@ -425,8 +499,53 @@ server {
 }
 ```
 
-The container's nginx already honours `X-Forwarded-*`, so Laravel generates
-correct `https://` links once the proxy sets them.
+---
+
+### D. A spare IP is available
+
+If the VM has a second address, give Caddy that one and leave the existing
+service on the primary. No overlay changes needed — `HTTP_PORT` and the
+Caddy ports both accept an IP prefix:
+
+```bash
+# .env.production
+HTTP_PORT=127.0.0.1:8080
+```
+
+Then bind Caddy's ports to the spare IP by adding a tiny third file:
+
+```yaml
+# docker/production/compose.caddy-ip.yaml
+services:
+  caddy:
+    ports: !override
+      - "10.0.0.5:80:80"
+      - "10.0.0.5:443:443"
+```
+
+```bash
+docker compose -f docker/production/compose.yaml \
+               -f docker/production/compose.caddy.yaml \
+               -f docker/production/compose.caddy-ip.yaml \
+               --env-file .env.production up -d
+```
+
+---
+
+### Whichever you chose
+
+The container's nginx already honours `X-Forwarded-*`, so Laravel emits
+correct `https://` links once the proxy sets them. Verify end to end:
+
+```bash
+curl -I https://comet.example.org/up      # expect 200
+```
+
+Fold the extra `-f` files into your alias so later commands keep working:
+
+```bash
+alias comet='docker compose -f docker/production/compose.yaml -f docker/production/compose.proxy.yaml --env-file .env.production'
+```
 
 ---
 
@@ -684,6 +803,10 @@ git status --short   # no .env.production, no secrets/, no dumps
 | `docker compose` → "is not a docker command" | Compose v2 plugin missing (common on 20.04) | install `docker-compose-plugin`; v1 `docker-compose` will not work |
 | `permission denied ... docker.sock` | user not in the `docker` group | `sudo usermod -aG docker $USER`, then log out and back in |
 | Caddy: "no acme server" / challenge fails | DNS not pointing at the VM, or 80/443 blocked | `dig +short $COMET_DOMAIN`; open 80 **and** 443 |
+| `port is already allocated` on 80/443 | something else owns the port | you want option **B**, not the Caddy overlay — see [TLS and port 80](#tls-and-port-80) |
+| `network <name> declared as external, but could not be found` | wrong `PROXY_NETWORK` | `docker network ls`; use the proxy's actual network |
+| Proxy returns 502; `host not found in upstream "app"` | proxy not attached to the shared network | `docker network connect $PROXY_NETWORK <proxy-container>` |
+| Proxy reaches the *wrong* app | another service on that network is also named `app` | add a network alias for COMET and target that |
 | Caddy loops re-issuing certificates | `caddy_data` volume was deleted | restore/keep the volume; Let's Encrypt rate-limits duplicates |
 | Site loads over HTTP but links say `http://` | `APP_URL` still `http://`, or proxy not sending `X-Forwarded-Proto` | fix `APP_URL`, then `comet up -d` |
 | `systemctl status comet` fails after reboot | wrong `WorkingDirectory` in the unit | edit `/etc/systemd/system/comet.service`, `daemon-reload` |

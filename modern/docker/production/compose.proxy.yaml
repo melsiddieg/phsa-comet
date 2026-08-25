@@ -1,0 +1,52 @@
+# Shared-proxy overlay — for a host where something ELSE already owns :80/:443.
+#
+# Use this INSTEAD of compose.caddy.yaml when another container (Traefik,
+# nginx-proxy, Caddy, jwilder, another app's stack...) is already bound to
+# port 80 on this VM.
+#
+#   docker compose \
+#     -f docker/production/compose.yaml \
+#     -f docker/production/compose.proxy.yaml \
+#     --env-file .env.production up -d
+#
+# COMET then publishes NO host ports at all. The existing proxy reaches it
+# over a shared Docker network as `app:8080`.
+#
+# Required in .env.production:
+#   PROXY_NETWORK=<name of the existing proxy's docker network>
+#   APP_URL=https://comet.example.org
+#
+# Find the proxy's network first:
+#   docker inspect -f '{{range $n,$_ := .NetworkSettings.Networks}}{{$n}} {{end}}' <proxy-container>
+
+services:
+  app:
+    # Publish nothing on the host — the proxy talks to us over `edge`.
+    ports: !reset []
+    networks: [comet, edge]
+
+    # Most auto-discovering proxies read labels. Uncomment the set that
+    # matches yours (values come from .env.production).
+    #
+    # --- Traefik v2/v3 ---
+    # labels:
+    #   traefik.enable: "true"
+    #   traefik.docker.network: ${PROXY_NETWORK}
+    #   traefik.http.routers.comet.rule: Host(`${COMET_DOMAIN}`)
+    #   traefik.http.routers.comet.entrypoints: websecure
+    #   traefik.http.routers.comet.tls.certresolver: letsencrypt
+    #   traefik.http.services.comet.loadbalancer.server.port: "8080"
+    #
+    # --- nginx-proxy (jwilder / nginxproxy) + acme-companion ---
+    # environment:
+    #   VIRTUAL_HOST: ${COMET_DOMAIN}
+    #   VIRTUAL_PORT: "8080"
+    #   LETSENCRYPT_HOST: ${COMET_DOMAIN}
+    #   LETSENCRYPT_EMAIL: ${ACME_EMAIL}
+
+networks:
+  # The existing proxy's network, created by that other stack. `external`
+  # means Compose will use it, never create or delete it.
+  edge:
+    external: true
+    name: ${PROXY_NETWORK:?PROXY_NETWORK is required - set it to the existing proxy network}
