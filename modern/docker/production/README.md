@@ -113,6 +113,23 @@ docker --version && docker compose version
 A fresh Linux VM needs Docker Engine, the Compose plugin, and a firewall.
 These steps assume `sudo` and a non-root login user.
 
+> **Already have Docker?** Check what you have and skip ahead:
+>
+> ```bash
+> docker compose version    # want v2.26.1+
+> docker --version          # want 20.10+ (24.0+ preferred)
+> docker run --rm hello-world
+> ```
+>
+> If Compose reports **v2.26.1** or newer, jump straight to
+> [Quick start](#quick-start) — but still do the
+> [Firewall](#firewall) and [Disk](#disk) steps below, which are easy to
+> miss and matter more than the install.
+>
+> Both compose files in this directory are validated against **v2.26.1**
+> exactly: they parse with zero warnings and use no feature newer than that
+> release.
+
 ### Ubuntu 20.04 LTS (focal)
 
 > **Check your Ubuntu release first — 20.04 reached end of standard support in
