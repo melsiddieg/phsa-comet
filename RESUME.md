@@ -40,7 +40,7 @@ need (see "Getting real data in" below).
 Prereqs: `podman` (or Docker) + compose, `git`, ~30 GB free for a full vocab.
 
 ```bash
-git clone git@github.com:melsiddieg/phsa-commet.git commet && cd commet
+git clone git@github.com:melsiddieg/phsa-comet.git commet && cd commet
 
 # 1. Secrets (values are arbitrary for local; pg one just has to be consistent)
 mkdir -p secrets
@@ -174,7 +174,10 @@ Then Mapping Mode opens with instant ranked candidates.
 
 ## Known debts / gotchas
 
-- Repo is named `phsa-commet` (double-m) while the app is "COMET" — cosmetic.
+- The GitHub repo is `phsa-comet`, but a **local clone directory named
+  `commet`** is what gives the legacy compose project its `commet_` prefix
+  (hence `commet_comet_net` below). Rename the directory and that network
+  name changes with it — update `LEGACY_DB_HOST`/network args accordingly.
 - `*_CUSTOM.csv` files **must have a header row** (loader COPYs with
   `HEADER true`); the converters emit them, hand-made ones need them too.
 - Two separate compose stacks: legacy at repo root (`comet_*`, net

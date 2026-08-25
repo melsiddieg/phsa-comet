@@ -96,7 +96,7 @@ docker --version && docker compose version
 ### 1. Get the code
 
 ```bash
-git clone https://github.com/melsiddieg/phsa-commet.git commet
+git clone https://github.com/melsiddieg/phsa-comet.git commet
 cd commet/modern
 ```
 

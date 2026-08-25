@@ -350,13 +350,13 @@ az role assignment create --assignee "$APP_ID" --role Contributor \
 az ad app federated-credential create --id "$APP_ID" --parameters '{
   "name": "github-tags",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:melsiddieg/phsa-commet:ref:refs/tags/v1",
+  "subject": "repo:melsiddieg/phsa-comet:ref:refs/tags/v1",
   "audiences": ["api://AzureADTokenExchange"]
 }'
 az ad app federated-credential create --id "$APP_ID" --parameters '{
   "name": "github-production",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:melsiddieg/phsa-commet:environment:production",
+  "subject": "repo:melsiddieg/phsa-comet:environment:production",
   "audiences": ["api://AzureADTokenExchange"]
 }'
 ```
