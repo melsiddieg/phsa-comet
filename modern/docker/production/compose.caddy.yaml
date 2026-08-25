@@ -1,0 +1,38 @@
+# TLS overlay — adds Caddy in front of the app with automatic HTTPS.
+#
+#   docker compose \
+#     -f docker/production/compose.yaml \
+#     -f docker/production/compose.caddy.yaml \
+#     --env-file .env.production up -d
+#
+# Requires in .env.production:
+#   COMET_DOMAIN=comet.example.org   (public DNS A/AAAA record -> this VM)
+#   ACME_EMAIL=ops@example.org       (Let's Encrypt expiry notices)
+#   APP_URL=https://comet.example.org
+#   HTTP_PORT=127.0.0.1:8080         (stop publishing the app publicly)
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"      # required for the ACME HTTP challenge + HTTP->HTTPS redirect
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    environment:
+      COMET_DOMAIN: ${COMET_DOMAIN:?COMET_DOMAIN is required for TLS}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required for TLS}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # certificates — MUST persist or you will hit rate limits
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    networks: [comet]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}

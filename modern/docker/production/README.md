@@ -1,11 +1,26 @@
 # COMET — Production Deployment (Docker Compose)
 
-Self-hosted production deployment of the COMET mapping application using
-Docker Compose. Everything runs on one host: app, queue worker, PostgreSQL
-and Redis.
+Manual, self-hosted deployment of COMET onto a **single standalone Linux VM**
+using Docker Compose. Everything runs on that one host: app, queue worker,
+PostgreSQL, Redis, and (optionally) a TLS-terminating proxy.
 
-Tested with **Docker Compose v2.26.1** (Compose Specification, `docker compose`
-— note the space, not the legacy `docker-compose`).
+Written against **Ubuntu 20.04 LTS** and **Docker Compose v2.26.1**
+(`docker compose` — with a space, not the legacy `docker-compose`). The steps
+work unchanged on 22.04/24.04 and, with the noted package swap, on RHEL 9.
+
+**Whole deployment, end to end:**
+
+| # | Step | Time |
+|---|------|------|
+| 1 | [Prepare the VM](#prepare-the-vm) — Docker, firewall, disk | ~10 min |
+| 2 | [Quick start](#quick-start) — secrets, env, build, first admin | ~15 min |
+| 3 | [TLS with a real domain](#tls-with-a-real-domain) — Caddy + Let's Encrypt | ~5 min |
+| 4 | [Run at boot](#run-at-boot-systemd) — systemd unit, reboot test | ~5 min |
+| 5 | [Loading data](#loading-data) — vocabulary and source terms | hours |
+| 6 | [Security checklist](#security-checklist) — before real data | ~10 min |
+
+Budget about an hour to a working, TLS-protected instance, plus vocabulary
+load time.
 
 ---
 
@@ -13,15 +28,17 @@ Tested with **Docker Compose v2.26.1** (Compose Specification, `docker compose`
 
 1. [Architecture](#architecture)
 2. [Requirements](#requirements)
-3. [Quick start](#quick-start)
-4. [Configuration](#configuration)
-5. [Loading data](#loading-data)
-6. [Day-2 operations](#day-2-operations)
-7. [Backup and restore](#backup-and-restore)
-8. [Upgrades and rollback](#upgrades-and-rollback)
-9. [TLS / reverse proxy](#tls--reverse-proxy)
-10. [Security checklist](#security-checklist)
-11. [Troubleshooting](#troubleshooting)
+3. [Prepare the VM](#prepare-the-vm)
+4. [Quick start](#quick-start)
+5. [TLS with a real domain](#tls-with-a-real-domain)
+6. [Run at boot (systemd)](#run-at-boot-systemd)
+7. [Configuration](#configuration)
+8. [Loading data](#loading-data)
+9. [Day-2 operations](#day-2-operations)
+10. [Backup and restore](#backup-and-restore)
+11. [Upgrades and rollback](#upgrades-and-rollback)
+12. [Security checklist](#security-checklist)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -91,14 +108,148 @@ docker --version && docker compose version
 
 ---
 
+## Prepare the VM
+
+A fresh Linux VM needs Docker Engine, the Compose plugin, and a firewall.
+These steps assume `sudo` and a non-root login user.
+
+### Ubuntu 20.04 LTS (focal)
+
+> **Check your Ubuntu release first — 20.04 reached end of standard support in
+> April 2025.** It only receives security updates under an Ubuntu Pro / ESM
+> subscription. Running an unpatched OS under a PHI workload is a real finding
+> in any security review. Confirm ESM is attached, or plan an upgrade to 22.04
+> / 24.04:
+>
+> ```bash
+> lsb_release -a          # confirm: Ubuntu 20.04.x LTS (focal)
+> pro status              # "esm-infra: enabled" if covered
+> ```
+>
+> The commands below work unchanged on 22.04 and 24.04 — `$VERSION_CODENAME`
+> selects the right Docker repo automatically.
+
+**Remove any old Docker first.** 20.04's archive ships `docker.io` and the
+Python-based `docker-compose` v1, which conflict with the modern packages.
+This stack needs Compose **v2** (`docker compose`, with a space):
+
+```bash
+sudo apt-get remove -y docker docker-engine docker.io containerd runc docker-compose
+```
+
+```bash
+# 1. Docker Engine + Compose plugin, from Docker's own repo (focal's archive
+#    has no Compose v2 at all)
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings   # does not exist on 20.04 by default
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
+                        docker-buildx-plugin docker-compose-plugin
+
+# 2. Run docker without sudo (log out and back in for this to take effect)
+sudo usermod -aG docker "$USER"
+
+# 3. Start on boot
+sudo systemctl enable --now docker
+```
+
+### RHEL 9 / Rocky / AlmaLinux (alternative)
+
+```bash
+sudo dnf -y install dnf-plugins-core
+sudo dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+sudo dnf -y install docker-ce docker-ce-cli containerd.io \
+                    docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker "$USER"
+sudo systemctl enable --now docker
+```
+
+### Verify
+
+```bash
+docker --version          # 24.0+
+docker compose version    # v2.26.1+
+docker run --rm hello-world
+```
+
+If `docker compose version` errors but `docker-compose --version` prints
+`1.x`, you are still on the old Python Compose — the plugin did not install.
+Re-run the `docker-compose-plugin` step above. Every command in this README
+uses `docker compose` (space); Compose v1 will not understand this file.
+
+### Firewall
+
+Only 80/443 should reach the VM. Postgres and Redis are **not** published to
+the host by default — do not open 5432 or 6379.
+
+```bash
+# Ubuntu / Debian
+sudo ufw allow OpenSSH
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable
+
+# RHEL family
+sudo firewall-cmd --permanent --add-service=ssh
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+```
+
+> **Docker bypasses ufw.** Docker writes its own iptables rules, so a
+> published port is reachable even if ufw "denies" it. That is exactly why
+> this stack keeps the database and cache unpublished and binds the app to
+> `127.0.0.1` behind a proxy — do not rely on ufw alone to hide a service.
+
+### Disk
+
+The vocabulary is the space hog. Docker stores volumes under
+`/var/lib/docker`, so that filesystem needs the room:
+
+```bash
+df -h /var/lib/docker
+```
+
+If your root disk is small but a data disk is mounted elsewhere, move
+Docker's data root before you load anything:
+
+```bash
+sudo systemctl stop docker
+echo '{ "data-root": "/mnt/data/docker" }' | sudo tee /etc/docker/daemon.json
+sudo rsync -aP /var/lib/docker/ /mnt/data/docker/
+sudo systemctl start docker
+```
+
+### Where to put the code
+
+The systemd unit shipped here assumes **`/opt/comet`**:
+
+```bash
+sudo mkdir -p /opt/comet
+sudo chown "$USER:$USER" /opt/comet
+```
+
+---
+
 ## Quick start
 
 ### 1. Get the code
 
 ```bash
-git clone https://github.com/melsiddieg/phsa-comet.git commet
-cd commet/modern
+cd /opt/comet
+git clone https://github.com/melsiddieg/phsa-comet.git .
+cd modern
 ```
+
+The Compose project name is pinned to `comet` inside `compose.yaml`, so
+container and volume names do not depend on this directory.
 
 ### 2. Create the database password secret
 
@@ -172,6 +323,120 @@ alias comet='docker compose -f docker/production/compose.yaml --env-file .env.pr
 ```
 
 The rest of this README uses `comet` to mean exactly that.
+
+---
+
+## TLS with a real domain
+
+The stack serves **plain HTTP on 8080**. Never expose that to the internet.
+On a standalone VM the simplest correct answer is the bundled Caddy overlay:
+it obtains and renews Let's Encrypt certificates automatically.
+
+### 1. Point DNS at the VM
+
+Create an `A` record (and `AAAA` if you have IPv6) for your hostname pointing
+at the VM's public IP. Verify it resolves **before** starting Caddy — a failed
+ACME challenge counts against Let's Encrypt rate limits:
+
+```bash
+dig +short comet.example.org      # must print this VM's public IP
+```
+
+### 2. Add the TLS settings
+
+In `.env.production`:
+
+```bash
+COMET_DOMAIN=comet.example.org
+ACME_EMAIL=ops@example.org
+APP_URL=https://comet.example.org
+HTTP_PORT=127.0.0.1:8080      # stop publishing the app publicly
+```
+
+### 3. Start with the overlay
+
+```bash
+docker compose \
+  -f docker/production/compose.yaml \
+  -f docker/production/compose.caddy.yaml \
+  --env-file .env.production up -d
+```
+
+Caddy takes ports 80 and 443, proxies to `app:8080` over the internal network,
+and issues a certificate on first request. Watch it happen:
+
+```bash
+docker compose -f docker/production/compose.yaml \
+               -f docker/production/compose.caddy.yaml \
+               --env-file .env.production logs -f caddy
+curl -I https://comet.example.org/up
+```
+
+> Certificates live in the `caddy_data` volume. **Do not delete that volume** —
+> re-issuing repeatedly will hit Let's Encrypt rate limits (5 duplicate
+> certificates per week).
+
+Because the overlay is a second `-f`, every later command needs both files.
+Fold that into the alias:
+
+```bash
+alias comet='docker compose -f docker/production/compose.yaml -f docker/production/compose.caddy.yaml --env-file .env.production'
+```
+
+### Using an existing proxy instead
+
+If the VM already runs nginx/HAProxy, skip the overlay, keep
+`HTTP_PORT=127.0.0.1:8080`, and proxy to it:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name comet.example.org;
+    ssl_certificate     /etc/letsencrypt/live/comet.example.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/comet.example.org/privkey.pem;
+
+    client_max_body_size 64m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+The container's nginx already honours `X-Forwarded-*`, so Laravel generates
+correct `https://` links once the proxy sets them.
+
+---
+
+## Run at boot (systemd)
+
+Services carry `restart: unless-stopped`, so **Docker already restarts them
+after a reboot**. The unit below adds ordered start/stop, recovers from a
+`docker compose down`, and gives you `systemctl status comet`.
+
+```bash
+sudo cp docker/production/comet.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now comet
+systemctl status comet --no-pager
+```
+
+The unit assumes the repo is at **`/opt/comet`**. If you cloned elsewhere,
+edit `WorkingDirectory=` before enabling it. To include the TLS overlay, add
+`-f docker/production/compose.caddy.yaml` to the `ExecStart`/`ExecStop` lines.
+
+Verify it really survives a reboot — do this once, before go-live:
+
+```bash
+sudo reboot
+# ... reconnect ...
+systemctl is-active comet && curl -f https://comet.example.org/up
+```
 
 ---
 
@@ -310,7 +575,7 @@ ls -lh docker/production/backups/
 Nightly via cron on the host:
 
 ```cron
-0 2 * * * cd /opt/commet/modern && docker compose -f docker/production/compose.yaml --env-file .env.production exec -T db sh -c 'pg_dump -U comet_app -Fc comet > /backups/comet-$(date +\%F).dump' && find /opt/commet/modern/docker/production/backups -name '*.dump' -mtime +14 -delete
+0 2 * * * cd /opt/comet/modern && docker compose -f docker/production/compose.yaml --env-file .env.production exec -T db sh -c 'pg_dump -U comet_app -Fc comet > /backups/comet-$(date +\%F).dump' && find /opt/comet/modern/docker/production/backups -name '*.dump' -mtime +14 -delete
 ```
 
 ### Restore
@@ -355,52 +620,6 @@ comet build && comet up -d
 
 ---
 
-## TLS / reverse proxy
-
-The stack serves **plain HTTP on 8080**. Never expose that directly to the
-internet. Terminate TLS in front of it.
-
-Bind the app to loopback only:
-
-```bash
-# .env.production
-HTTP_PORT=127.0.0.1:8080
-APP_URL=https://comet.example.org
-```
-
-Example Caddy config (automatic Let's Encrypt certificates):
-
-```caddy
-comet.example.org {
-    reverse_proxy 127.0.0.1:8080
-}
-```
-
-Equivalent nginx:
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name comet.example.org;
-    ssl_certificate     /etc/letsencrypt/live/comet.example.org/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/comet.example.org/privkey.pem;
-
-    client_max_body_size 64m;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-The container's nginx already honours `X-Forwarded-*`, so Laravel generates
-correct `https://` URLs once the proxy sets them.
-
----
 
 ## Security checklist
 
@@ -417,6 +636,10 @@ Before handling real patient-derived data:
 - [ ] Nightly backups running, and a restore actually tested
 - [ ] Host firewall allows only 80/443
 - [ ] `LOG_LEVEL=warning` (avoid `debug` — it can log sensitive values)
+- [ ] **Host OS receiving security updates** — on Ubuntu 20.04 that means an
+      active Ubuntu Pro/ESM subscription (`pro status`), or an upgrade to a
+      supported release
+- [ ] `unattended-upgrades` enabled, or a documented patching schedule
 
 `.gitignore` already excludes `.env*`, `secrets/`, and `vocab_data/`. Verify
 before your first commit:
@@ -441,6 +664,12 @@ git status --short   # no .env.production, no secrets/, no dumps
 | Vocabulary load finds no files | `VOCAB_DATA_DIR` wrong | it is relative to `docker/production/`; verify with `comet exec app ls /var/www/vocab_data` |
 | Jobs queue but never run | worker down | `comet ps queue`, `comet logs queue` |
 | Disk full during vocab load | Athena data is large | free space or move the Docker data root |
+| `docker compose` → "is not a docker command" | Compose v2 plugin missing (common on 20.04) | install `docker-compose-plugin`; v1 `docker-compose` will not work |
+| `permission denied ... docker.sock` | user not in the `docker` group | `sudo usermod -aG docker $USER`, then log out and back in |
+| Caddy: "no acme server" / challenge fails | DNS not pointing at the VM, or 80/443 blocked | `dig +short $COMET_DOMAIN`; open 80 **and** 443 |
+| Caddy loops re-issuing certificates | `caddy_data` volume was deleted | restore/keep the volume; Let's Encrypt rate-limits duplicates |
+| Site loads over HTTP but links say `http://` | `APP_URL` still `http://`, or proxy not sending `X-Forwarded-Proto` | fix `APP_URL`, then `comet up -d` |
+| `systemctl status comet` fails after reboot | wrong `WorkingDirectory` in the unit | edit `/etc/systemd/system/comet.service`, `daemon-reload` |
 
 Collect diagnostics:
 

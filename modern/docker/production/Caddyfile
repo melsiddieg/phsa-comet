@@ -1,0 +1,22 @@
+# Caddy fetches and renews Let's Encrypt certificates automatically.
+# COMET_DOMAIN and ACME_EMAIL come from .env.production.
+{
+	email {$ACME_EMAIL}
+}
+
+{$COMET_DOMAIN} {
+	encode gzip
+
+	# Match nginx's client_max_body_size inside the app container.
+	request_body {
+		max_size 64MB
+	}
+
+	# Long-running vocabulary/import requests.
+	reverse_proxy app:8080 {
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+}

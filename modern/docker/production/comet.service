@@ -1,0 +1,34 @@
+# COMET — systemd unit for the Docker Compose stack.
+#
+# Install (assumes the repo lives at /opt/comet):
+#   sudo cp docker/production/comet.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now comet
+#
+# Edit WorkingDirectory below if you cloned somewhere else.
+#
+# Note: services already carry `restart: unless-stopped`, so Docker restarts
+# them after a reboot on its own. This unit adds ordered start/stop, brings
+# the stack back up after a `down`, and gives you `systemctl status comet`.
+
+[Unit]
+Description=COMET mapping application (Docker Compose)
+Documentation=https://github.com/melsiddieg/phsa-comet
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/comet/modern
+
+# Compose pulls/builds can take minutes on first boot.
+TimeoutStartSec=0
+
+ExecStart=/usr/bin/docker compose -f docker/production/compose.yaml --env-file .env.production up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f docker/production/compose.yaml --env-file .env.production down
+ExecReload=/usr/bin/docker compose -f docker/production/compose.yaml --env-file .env.production up -d --remove-orphans
+
+[Install]
+WantedBy=multi-user.target
