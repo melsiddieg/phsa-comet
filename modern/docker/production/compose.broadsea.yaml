@@ -1,0 +1,50 @@
+# Broadsea overlay — run COMET alongside an existing OHDSI Broadsea 3 stack.
+#
+#   docker compose \
+#     -f docker/production/compose.yaml \
+#     -f docker/production/compose.broadsea.yaml \
+#     --env-file .env.production up -d
+#
+# Broadsea's Traefik already owns :80/:443 on this host. COMET therefore
+# publishes NO host ports and is routed by Traefik over Broadsea's network.
+#
+# Broadsea's Traefik runs BOTH providers (traefik_http.yml):
+#   docker: unix:///var/run/docker.sock, exposedByDefault: false
+#   file:   /etc/traefik/dynamic  (Broadsea's own routers.yml)
+# We use the DOCKER provider via labels, so nothing in the Broadsea
+# checkout is modified and Broadsea upgrades cannot clobber our routing.
+#
+# Required in .env.production:
+#   PROXY_NETWORK=broadsea_default        # verify: docker inspect traefik
+#   COMET_DOMAIN=comet.example.org        # DEDICATED hostname - see README
+#   COMET_ENTRYPOINT=http                 # match Broadsea's HTTP_TYPE (http|https)
+#   APP_URL=https://comet.example.org
+#   HTTP_PORT is ignored here; no ports are published.
+
+services:
+  app:
+    # Broadsea's Traefik owns the host ports — publish nothing.
+    ports: !reset []
+
+    networks:
+      comet: {}
+      edge:
+        # `app` is a generic name and Broadsea's network is shared; expose an
+        # unambiguous alias.
+        aliases: [comet-app]
+
+    labels:
+      # Traefik runs exposedByDefault:false, so this opt-in is required.
+      traefik.enable: "true"
+      # app sits on two networks; tell Traefik which one to dial.
+      traefik.docker.network: ${PROXY_NETWORK}
+
+      traefik.http.routers.comet.rule: Host(`${COMET_DOMAIN}`)
+      traefik.http.routers.comet.entrypoints: ${COMET_ENTRYPOINT:-http}
+      traefik.http.services.comet.loadbalancer.server.port: "8080"
+
+networks:
+  # Broadsea's network. `external` => we join it, never create or delete it.
+  edge:
+    external: true
+    name: ${PROXY_NETWORK:?PROXY_NETWORK is required - e.g. broadsea_default}

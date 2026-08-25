@@ -358,6 +358,7 @@ docker ps --format '{{.Names}}\t{{.Ports}}'   # is it a container?
 |---|---|---|
 | Nothing on 80/443 | bundled Caddy, automatic certs | [A](#a-nothing-else-on-80443--bundled-caddy) |
 | **Another _container_ owns 80** (Traefik, nginx-proxy, another stack) | share its network, publish no ports | [B](#b-another-container-already-owns-80) |
+| **OHDSI Broadsea 3** owns 80 (its Traefik) | label-based routing, dedicated hostname | [B special case](#b-special-case-alongside-ohdsi-broadsea-3) |
 | A **host** nginx/Apache owns 80 | bind to loopback, `proxy_pass` | [C](#c-a-host-nginx--apache-owns-80) |
 | The VM has a **second IP** free | bind Caddy to that IP | [D](#d-a-spare-ip-is-available) |
 
@@ -467,6 +468,87 @@ location / {
 > **Name collision:** the service is called `app`, which is generic. If the
 > other stack also has an `app` on that network, DNS is ambiguous — add a
 > network alias (e.g. `comet-app`) and point the proxy at that instead.
+
+---
+
+### B (special case). Alongside OHDSI Broadsea 3
+
+Broadsea runs **Traefik v2.11** (container `traefik`) bound to 80/443. Its
+Traefik enables *both* providers — the Docker socket **and** the static file
+`traefik/routers.yml`. Broadsea's own services use the file provider; we use
+the **Docker provider via labels**, so nothing in your Broadsea checkout is
+edited and a Broadsea upgrade cannot clobber COMET's routing.
+
+> #### Use a dedicated hostname, not a path prefix
+>
+> Broadsea routes everything by path on one host — `/atlas`, `/WebAPI`,
+> `/hades`, with `broadsea-content` claiming `PathPrefix(`/`)` as a
+> catch-all. Serving COMET at `/comet` would need `stripPrefix`, and that
+> **breaks the UI**: Livewire posts to `/livewire/update` at the *root*, so
+> after stripping, the browser's request goes to `/` — which Traefik hands
+> to `broadsea-content`, not COMET. Every interactive screen dies.
+>
+> Give COMET its own hostname (`comet.example.org`, or a CNAME to the same
+> VM). That is a one-line DNS change and avoids the whole class of problem.
+
+**1. Confirm Broadsea's network name** (it is the project's default network,
+so it follows the directory Broadsea was cloned into):
+
+```bash
+docker inspect -f '{{range $n,$_ := .NetworkSettings.Networks}}{{$n}}{{"\n"}}{{end}}' traefik
+# typically: broadsea_default
+```
+
+**2. Confirm which entrypoint Broadsea uses** — it is named after
+`HTTP_TYPE` in Broadsea's `.env` (`http` or `https`):
+
+```bash
+grep -E '^HTTP_TYPE' /path/to/Broadsea/.env
+```
+
+**3. Configure** in `.env.production`:
+
+```bash
+PROXY_NETWORK=broadsea_default
+COMET_DOMAIN=comet.example.org
+COMET_ENTRYPOINT=http            # must match Broadsea's HTTP_TYPE
+APP_URL=http://comet.example.org # https:// if Broadsea terminates TLS
+```
+
+**4. Start with the Broadsea overlay:**
+
+```bash
+docker compose \
+  -f docker/production/compose.yaml \
+  -f docker/production/compose.broadsea.yaml \
+  --env-file .env.production up -d
+```
+
+COMET publishes **no host ports**. Traefik discovers it by label and routes
+`Host(comet.example.org)` to `app:8080` over Broadsea's network. The app also
+gets the network alias `comet-app`, since `app` is generic on a shared
+network.
+
+**5. Verify:**
+
+```bash
+# Traefik should list a router called "comet"
+curl -s http://<broadsea-host>/api/http/routers | grep -o '"name":"comet[^"]*"'
+
+curl -I http://comet.example.org/up      # expect 200
+```
+
+> **TLS:** COMET inherits whatever Broadsea does. If Broadsea runs
+> `HTTP_TYPE=https`, its Traefik needs a certificate valid for
+> `comet.example.org` too — a SAN/wildcard cert, or an added cert entry in
+> Broadsea's `traefik/tls_https.yml`. If Broadsea is HTTP-only, COMET is
+> HTTP-only, which is **not acceptable for real data** — fix that at the
+> Broadsea layer so both benefit.
+
+**Why they belong together:** COMET produces the `SOURCE_TO_CONCEPT_MAP` that
+drives the ETL populating the OMOP CDM — the same CDM that Broadsea's ATLAS
+and WebAPI query. Mapping and analysis on one host is a coherent setup, not a
+coincidence.
 
 ---
 
@@ -807,6 +889,9 @@ git status --short   # no .env.production, no secrets/, no dumps
 | `network <name> declared as external, but could not be found` | wrong `PROXY_NETWORK` | `docker network ls`; use the proxy's actual network |
 | Proxy returns 502; `host not found in upstream "app"` | proxy not attached to the shared network | `docker network connect $PROXY_NETWORK <proxy-container>` |
 | Proxy reaches the *wrong* app | another service on that network is also named `app` | add a network alias for COMET and target that |
+| Broadsea/Traefik never routes to COMET | `traefik.enable` missing, or wrong entrypoint | Traefik runs `exposedByDefault:false`; check `COMET_ENTRYPOINT` matches Broadsea's `HTTP_TYPE` |
+| Traefik 404s on the COMET hostname | DNS/host header not matching `COMET_DOMAIN` | `curl -H 'Host: comet.example.org' http://<vm-ip>/up` to test past DNS |
+| COMET loads but buttons/tables do nothing | served under a **path prefix** — Livewire posts to `/livewire/update` at the root | use a dedicated hostname, not `/comet` |
 | Caddy loops re-issuing certificates | `caddy_data` volume was deleted | restore/keep the volume; Let's Encrypt rate-limits duplicates |
 | Site loads over HTTP but links say `http://` | `APP_URL` still `http://`, or proxy not sending `X-Forwarded-Proto` | fix `APP_URL`, then `comet up -d` |
 | `systemctl status comet` fails after reboot | wrong `WorkingDirectory` in the unit | edit `/etc/systemd/system/comet.service`, `daemon-reload` |
