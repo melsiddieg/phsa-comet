@@ -686,54 +686,33 @@ git status --short   # no .env.production, no secrets/, no dumps
 pulls images (and honours its own proxy config), but build containers get a
 plain container network and do **not** inherit the daemon's proxy settings. On
 a locked-down corporate or health-authority network the base images therefore
-pull fine while the build dies at:
+pull fine while the build dies fetching packages:
 
 ```
-RUN apk add --no-cache icu-dev libzip-dev postgresql-dev linux-headers git unzip
-... did not complete successfully: exit code: 6
+RUN apt-get update && apt-get install -y --no-install-recommends libicu-dev ...
+... Could not resolve 'deb.debian.org'   /   certificate verification failed
 ```
 
-apk's exit code is the number of packages it could not resolve — **6 of 6**,
-i.e. it reached no repository at all.
-
-**Confirm it in one command:**
+**Confirm in one command** — this is also the check to run *before* changing
+anything:
 
 ```bash
-docker run --rm alpine:3 sh -c 'apk update && echo NETWORK-OK'
+docker run --rm debian:bookworm-slim sh -c 'apt-get update >/dev/null && echo MIRROR-OK'
 ```
 
-`NETWORK-OK` means the network is fine and the failure was transient — just
-rebuild. Otherwise the warning text tells you which fix you need:
+`MIRROR-OK` means package downloads work and the build will succeed.
+Otherwise pick a fix below by the error text.
 
-| Warning contains | Cause | Fix |
-|---|---|---|
-| `TLS: unspecified error` | **TLS-inspecting proxy** — its certificate is not trusted inside containers | [Fix 1](#fix-1--switch-apk-to-plain-http-fastest-and-safe) or [Fix 2](#fix-2--trust-the-inspecting-proxys-ca) |
-| `DNS: ... error` | container DNS cannot resolve | [Fix 4](#fix-4--fix-dns-for-containers) |
-| `temporary error` / timeouts | egress needs a proxy | [Fix 3](#fix-3--forward-your-proxy-into-the-build) |
-| `HTTP 503` after `APK_HTTP=1` | proxy refuses plain HTTP too — both routes blocked | [Fix 5](#fix-5--do-not-build-on-the-server-guaranteed) |
+> **Note on base images.** This image is Debian-based partly for this reason:
+> some networks block Alpine's `dl-cdn.alpinelinux.org` while permitting
+> `deb.debian.org`. See [`BASE-IMAGE.md`](BASE-IMAGE.md).
 
-### Fix 1 — switch apk to plain HTTP (fastest, and safe)
+### Fix 1 — trust the inspecting proxy's CA
 
-The quickest way past TLS interception is to stop using TLS for package
-downloads:
-
-```bash
-APK_HTTP=1 comet build
-```
-
-**This does not weaken package integrity.** apk verifies every index and
-package against the Alpine signing keys in `/etc/apk/keys`; TLS provides
-confidentiality, not authenticity, for apk. Dropping to HTTP only reveals
-*which* packages are fetched — it cannot let an attacker substitute one.
-(Everything else in the stack still uses TLS normally.)
-
-You will see `>> apk switched to plain HTTP` early in the build.
-
-### Fix 2 — trust the inspecting proxy's CA
-
-Cleaner if your network also blocks plain HTTP. `docker pull` works because
-the **daemon** uses the host trust store, which has the corporate root;
-containers ship their own bundle, which does not.
+The common case on corporate networks. `docker pull` works because the
+**daemon** uses the host trust store, which has the corporate root;
+containers ship their own bundle, which does not — so TLS to the package
+mirror fails inside the build.
 
 ```bash
 # reuse the host bundle — it already works, so it contains the root
@@ -742,21 +721,18 @@ cp /etc/ssl/certs/ca-certificates.crt docker/production/ca-certs/host-bundle.crt
 comet build
 ```
 
-You should see `>> Added corporate CA(s) to /etc/ssl/certs/ca-certificates.crt`.
-The directory is git-ignored, so the certificate stays out of the repo. Full
-notes: [`ca-certs/README.md`](ca-certs/README.md).
+The build runs `update-ca-certificates` and logs
+`>> Added corporate CA(s) to the system trust store`. The directory is
+git-ignored, so the certificate stays out of the repo. Full notes:
+[`ca-certs/README.md`](ca-certs/README.md).
 
-> **Why the image sets `SSL_CERT_FILE`:** apk-tools 3 reads the
-> `/etc/ssl/certs` *directory* (hashed certs), not the bundle file — so
-> appending to the bundle alone has no effect. The Dockerfile therefore also
-> sets `SSL_CERT_FILE` to that bundle, which apk honours. The same variable
-> makes the corporate CA available to PHP at runtime, which matters if Entra
-> SSO also traverses the inspecting proxy.
+This also puts the corporate CA in front of PHP at runtime, which matters if
+Entra SSO traverses the same inspecting proxy.
 
-### Fix 3 — forward your proxy into the build
+### Fix 2 — forward your proxy into the build
 
-`compose.yaml` already passes `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`
-through as build args. Export them and rebuild:
+`compose.yaml` passes `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` through as
+build args. Export them and rebuild:
 
 ```bash
 export HTTPS_PROXY=http://proxy.internal:3128
@@ -772,14 +748,16 @@ systemctl show docker --property=Environment
 cat /etc/systemd/system/docker.service.d/*.conf 2>/dev/null
 ```
 
-### Fix 4 — fix DNS for containers
+### Fix 3 — fix DNS for containers
 
-If the failure is DNS rather than a proxy, give the daemon resolvers that work:
+If the failure is name resolution rather than TLS, give the daemon resolvers
+that work:
 
 ```bash
 echo '{ "dns": ["10.0.0.10", "1.1.1.1"] }' | sudo tee /etc/docker/daemon.json
 sudo systemctl restart docker
 ```
+
 
 ### Fix 5 — do not build on the server (guaranteed)
 
@@ -1086,8 +1064,8 @@ docker compose -f docker/production/compose.yaml \
 | Jobs queue but never run | worker down | `comet ps queue`, `comet logs queue` |
 | Disk full during vocab load | Athena data is large | free space or move the Docker data root |
 | `docker compose` → "is not a docker command" | Compose v2 plugin missing (common on 20.04) | install `docker-compose-plugin`; v1 `docker-compose` will not work |
-| Build fails: `apk add ... exit code: 6` | the build container cannot reach `dl-cdn.alpinelinux.org` — apk's exit code is the **number of packages it could not resolve** (6 = all of them) | see [Building on a restricted network](#building-on-a-restricted-network) |
-| `apk ... TLS: unspecified error` | TLS-inspecting proxy; its CA is not trusted inside containers | rebuild with `APK_HTTP=1`, or drop the CA into `docker/production/ca-certs/` |
+| Build fails fetching packages (`apt-get`) | build container cannot reach `deb.debian.org` | see [Building on a restricted network](#building-on-a-restricted-network) |
+| `certificate verification failed` during build | TLS-inspecting proxy; its CA is not trusted inside containers | drop the CA into `docker/production/ca-certs/` and rebuild |
 | `permission denied ... docker.sock` | user not in the `docker` group | `sudo usermod -aG docker $USER`, then log out and back in |
 | Caddy: "no acme server" / challenge fails | DNS not pointing at the VM, or 80/443 blocked | `dig +short $COMET_DOMAIN`; open 80 **and** 443 |
 | `port is already allocated` on 80/443 | something else owns the port | do not use the Caddy overlay — see [Alternative environments](#alternative-environments) |

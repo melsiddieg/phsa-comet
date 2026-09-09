@@ -10,12 +10,13 @@ directory empty is fine; the build is unchanged.
 ## Symptom this solves
 
 ```
-WARNING: updating and opening https://dl-cdn.alpinelinux.org/... : TLS: unspecified error
+Certificate verification failed: The certificate is NOT trusted.
+E: Failed to fetch https://deb.debian.org/... 
 ```
 
 `docker pull` works (the daemon uses the **host** trust store, which has the
-corporate root) while `apk` inside a build fails (containers ship their own
-minimal CA bundle, which does not).
+corporate root) while `apt-get` inside a build fails (containers ship their
+own CA bundle, which does not).
 
 ## Getting the certificate
 
@@ -28,7 +29,7 @@ cp /etc/ssl/certs/ca-certificates.crt docker/production/ca-certs/host-bundle.crt
 Or extract just the inspecting proxy's root:
 
 ```bash
-openssl s_client -showcerts -connect dl-cdn.alpinelinux.org:443 </dev/null 2>/dev/null \
+openssl s_client -showcerts -connect deb.debian.org:443 </dev/null 2>/dev/null \
   | awk '/BEGIN CERT/,/END CERT/' > docker/production/ca-certs/corporate-root.crt
 ```
 
