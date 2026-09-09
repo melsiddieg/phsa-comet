@@ -1,26 +1,70 @@
 # COMET — Production Deployment (Docker Compose)
 
-Manual, self-hosted deployment of COMET onto a **single standalone Linux VM**
-using Docker Compose. Everything runs on that one host: app, queue worker,
-PostgreSQL, Redis, and (optionally) a TLS-terminating proxy.
+Manual, self-hosted deployment of COMET onto a **single dedicated Linux
+server** using Docker Compose. Everything runs on that one host: app, queue
+worker, PostgreSQL, Redis, and Caddy for TLS.
 
-Written against **Ubuntu 20.04 LTS** and **Docker Compose v2.26.1**
-(`docker compose` — with a space, not the legacy `docker-compose`). The steps
-work unchanged on 22.04/24.04 and, with the noted package swap, on RHEL 9.
+Written against **Docker Compose v2.26.1** (`docker compose` — with a space,
+not the legacy `docker-compose`) on Ubuntu. Assumes Docker and Compose are
+already installed and that **nothing else is using ports 80/443**; if COMET
+must share the host, see [Alternative environments](#alternative-environments).
 
 **Whole deployment, end to end:**
 
 | # | Step | Time |
 |---|------|------|
-| 1 | [Prepare the VM](#prepare-the-vm) — Docker, firewall, disk | ~10 min |
+| 1 | [Prepare the server](#prepare-the-server) — verify Docker, firewall, disk | ~5 min |
 | 2 | [Quick start](#quick-start) — secrets, env, build, first admin | ~15 min |
-| 3 | [TLS and port 80](#tls-and-port-80) — proxy / certificates | ~5 min |
+| 3 | [TLS and certificates](#tls-and-certificates) — Caddy + Let's Encrypt | ~5 min |
 | 4 | [Run at boot](#run-at-boot-systemd) — systemd unit, reboot test | ~5 min |
 | 5 | [Loading data](#loading-data) — vocabulary and source terms | hours |
 | 6 | [Security checklist](#security-checklist) — before real data | ~10 min |
 
-Budget about an hour to a working, TLS-protected instance, plus vocabulary
+Budget about 30 minutes to a working, TLS-protected instance, plus vocabulary
 load time.
+
+<details>
+<summary><b>The whole thing as one copy-paste sequence</b> (read the sections for what each step means)</summary>
+
+```bash
+# --- 1. code -----------------------------------------------------------
+sudo mkdir -p /opt/comet && sudo chown "$USER:$USER" /opt/comet
+cd /opt/comet
+git clone https://github.com/melsiddieg/phsa-comet.git .
+cd modern
+
+# --- 2. secret + env ---------------------------------------------------
+mkdir -p ../secrets
+openssl rand -hex 24 > ../secrets/pg_app_pw.txt
+chmod 600 ../secrets/pg_app_pw.txt
+
+cp docker/production/.env.production.example .env.production
+chmod 600 .env.production
+echo "APP_KEY=base64:$(openssl rand -base64 32)"     # paste into .env.production
+$EDITOR .env.production                              # set APP_KEY, APP_URL,
+                                                     # COMET_DOMAIN, ACME_EMAIL,
+                                                     # HTTP_PORT=127.0.0.1:8080
+
+# --- 3. build + start with TLS ----------------------------------------
+alias comet='docker compose -f docker/production/compose.yaml -f docker/production/compose.caddy.yaml --env-file .env.production'
+comet build
+comet up -d
+comet ps                                             # migrate should show exited (0)
+
+# --- 4. first admin ----------------------------------------------------
+comet exec app php artisan db:seed --force           # admin@comet.local / change-me-now
+
+# --- 5. verify ---------------------------------------------------------
+curl -I https://comet.example.org/up                 # expect 200
+
+# --- 6. survive reboots ------------------------------------------------
+sudo cp docker/production/comet.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now comet
+```
+
+Then change the break-glass password, configure SSO, and work the
+[security checklist](#security-checklist) before loading real data.
+</details>
 
 ---
 
@@ -28,9 +72,9 @@ load time.
 
 1. [Architecture](#architecture)
 2. [Requirements](#requirements)
-3. [Prepare the VM](#prepare-the-vm)
+3. [Prepare the server](#prepare-the-server)
 4. [Quick start](#quick-start)
-5. [TLS and port 80](#tls-and-port-80)
+5. [TLS and certificates](#tls-and-certificates)
 6. [Run at boot (systemd)](#run-at-boot-systemd)
 7. [Configuration](#configuration)
 8. [Loading data](#loading-data)
@@ -38,7 +82,8 @@ load time.
 10. [Backup and restore](#backup-and-restore)
 11. [Upgrades and rollback](#upgrades-and-rollback)
 12. [Security checklist](#security-checklist)
-13. [Troubleshooting](#troubleshooting)
+13. [Alternative environments](#alternative-environments) — sharing the host
+14. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -108,45 +153,45 @@ docker --version && docker compose version
 
 ---
 
-## Prepare the VM
+## Prepare the server
 
-A fresh Linux VM needs Docker Engine, the Compose plugin, and a firewall.
-These steps assume `sudo` and a non-root login user.
+Docker and Compose are already installed on this server, so this is short.
 
-> **Already have Docker?** Check what you have and skip ahead:
->
-> ```bash
-> docker compose version    # want v2.26.1+
-> docker --version          # want 20.10+ (24.0+ preferred)
-> docker run --rm hello-world
-> ```
->
-> If Compose reports **v2.26.1** or newer, jump straight to
-> [Quick start](#quick-start) — but still do the
-> [Firewall](#firewall) and [Disk](#disk) steps below, which are easy to
-> miss and matter more than the install.
->
-> Both compose files in this directory are validated against **v2.26.1**
-> exactly: they parse with zero warnings and use no feature newer than that
-> release.
+**1. Confirm the toolchain:**
 
-### Ubuntu 20.04 LTS (focal)
+```bash
+cat /etc/os-release | head -2   # which distro/release is this?
+docker --version                # want 24.0+ (20.10 is the floor)
+docker compose version          # want v2.26.1+ — note the space, not `docker-compose`
+docker run --rm hello-world     # proves the daemon works for your user
+```
 
-> **Check your Ubuntu release first — 20.04 reached end of standard support in
-> April 2025.** It only receives security updates under an Ubuntu Pro / ESM
-> subscription. Running an unpatched OS under a PHI workload is a real finding
-> in any security review. Confirm ESM is attached, or plan an upgrade to 22.04
-> / 24.04:
->
-> ```bash
-> lsb_release -a          # confirm: Ubuntu 20.04.x LTS (focal)
-> pro status              # "esm-infra: enabled" if covered
-> ```
->
-> The commands below work unchanged on 22.04 and 24.04 — `$VERSION_CODENAME`
-> selects the right Docker repo automatically.
+Both compose files here are validated against **v2.26.1** exactly: they parse
+with zero warnings and use no feature newer than that release. If
+`docker compose version` errors but `docker-compose --version` prints `1.x`,
+you are on the old Python Compose, which cannot parse these files — install
+the `docker-compose-plugin` package.
 
-**Remove any old Docker first.** 20.04's archive ships `docker.io` and the
+**2. Run Docker without sudo** (skip if already done — `docker ps` works):
+
+```bash
+sudo usermod -aG docker "$USER"    # then log out and back in
+```
+
+<details>
+<summary>Installing Docker from scratch (only needed if a host lacks it)</summary>
+
+#### Ubuntu / Debian
+
+`$VERSION_CODENAME` selects the right Docker repo, so this works on 20.04,
+22.04 and 24.04 alike.
+
+> **If this host is Ubuntu 20.04**, note it left standard support in April
+> 2025 and only gets security updates under Ubuntu Pro / ESM. An unpatched OS
+> under a PHI workload is a real finding in a security review — check with
+> `lsb_release -a` and `pro status`, and prefer 22.04/24.04 for a new build.
+
+**Remove any old Docker first.** Older archives ship `docker.io` and the
 Python-based `docker-compose` v1, which conflict with the modern packages.
 This stack needs Compose **v2** (`docker compose`, with a space):
 
@@ -155,8 +200,8 @@ sudo apt-get remove -y docker docker-engine docker.io containerd runc docker-com
 ```
 
 ```bash
-# 1. Docker Engine + Compose plugin, from Docker's own repo (focal's archive
-#    has no Compose v2 at all)
+# 1. Docker Engine + Compose plugin, from Docker's own repo (distro archives
+#    often have no Compose v2 at all)
 sudo apt-get update
 sudo apt-get install -y ca-certificates curl gnupg
 sudo install -m 0755 -d /etc/apt/keyrings   # does not exist on 20.04 by default
@@ -177,7 +222,7 @@ sudo usermod -aG docker "$USER"
 sudo systemctl enable --now docker
 ```
 
-### RHEL 9 / Rocky / AlmaLinux (alternative)
+#### RHEL 9 / Rocky / AlmaLinux
 
 ```bash
 sudo dnf -y install dnf-plugins-core
@@ -188,18 +233,8 @@ sudo usermod -aG docker "$USER"
 sudo systemctl enable --now docker
 ```
 
-### Verify
+</details>
 
-```bash
-docker --version          # 24.0+
-docker compose version    # v2.26.1+
-docker run --rm hello-world
-```
-
-If `docker compose version` errors but `docker-compose --version` prints
-`1.x`, you are still on the old Python Compose — the plugin did not install.
-Re-run the `docker-compose-plugin` step above. Every command in this README
-uses `docker compose` (space); Compose v1 will not understand this file.
 
 ### Firewall
 
@@ -343,43 +378,22 @@ The rest of this README uses `comet` to mean exactly that.
 
 ---
 
-## TLS and port 80
+## TLS and certificates
 
 The stack serves **plain HTTP on 8080** and must sit behind something that
-terminates TLS. Which option you want depends entirely on what already owns
-port 80 on this VM. Find out first:
+terminates TLS. On a dedicated server with nothing else on ports 80/443, use
+the bundled **Caddy** overlay — it obtains and renews Let's Encrypt
+certificates automatically, with no certbot cron to maintain.
+
+> Sharing the host with another service that already owns port 80 (Traefik,
+> nginx-proxy, OHDSI Broadsea, a host nginx)? See
+> [Alternative environments](#alternative-environments) instead.
+
+**1. Point DNS at the server** and verify *before* starting Caddy — a failed
+ACME challenge counts against Let's Encrypt rate limits:
 
 ```bash
-sudo ss -lptn 'sport = :80'                  # what is listening
-docker ps --format '{{.Names}}\t{{.Ports}}'   # is it a container?
-```
-
-| What you find | Use | Section |
-|---|---|---|
-| Nothing on 80/443 | bundled Caddy, automatic certs | [A](#a-nothing-else-on-80443--bundled-caddy) |
-| **Another _container_ owns 80** (Traefik, nginx-proxy, another stack) | share its network, publish no ports | [B](#b-another-container-already-owns-80) |
-| **OHDSI Broadsea 3** owns 80 (its Traefik) | label-based routing, dedicated hostname | [B special case](#b-special-case-alongside-ohdsi-broadsea-3) |
-| A **host** nginx/Apache owns 80 | bind to loopback, `proxy_pass` | [C](#c-a-host-nginx--apache-owns-80) |
-| The VM has a **second IP** free | bind Caddy to that IP | [D](#d-a-spare-ip-is-available) |
-
-Whichever you pick, set the public URL:
-
-```bash
-# .env.production
-APP_URL=https://comet.example.org
-```
-
----
-
-### A. Nothing else on 80/443 — bundled Caddy
-
-Caddy obtains and renews Let's Encrypt certificates automatically.
-
-**1. Point DNS at the VM** and verify *before* starting — a failed ACME
-challenge counts against Let's Encrypt rate limits:
-
-```bash
-dig +short comet.example.org      # must print this VM's public IP
+dig +short comet.example.org      # must print this server's public IP
 ```
 
 **2. Configure** in `.env.production`:
@@ -387,10 +401,11 @@ dig +short comet.example.org      # must print this VM's public IP
 ```bash
 COMET_DOMAIN=comet.example.org
 ACME_EMAIL=ops@example.org
-HTTP_PORT=127.0.0.1:8080      # stop publishing the app publicly
+APP_URL=https://comet.example.org
+HTTP_PORT=127.0.0.1:8080      # stop publishing the app directly
 ```
 
-**3. Start with the overlay:**
+**3. Start with the overlay** (note the second `-f`):
 
 ```bash
 docker compose \
@@ -399,237 +414,34 @@ docker compose \
   --env-file .env.production up -d
 ```
 
-> Certificates live in the `caddy_data` volume. **Do not delete it** —
-> re-issuing repeatedly hits Let's Encrypt rate limits (5 duplicate
-> certificates per week).
-
----
-
-### B. Another container already owns 80
-
-This is the common case on a shared VM. Do **not** use the Caddy overlay —
-it would fight for port 80. Instead COMET publishes **no host ports at all**
-and the existing proxy reaches it over a shared Docker network.
-
-**1. Find the proxy's network:**
-
-```bash
-docker ps                                  # identify the proxy container
-docker inspect -f '{{range $n,$_ := .NetworkSettings.Networks}}{{$n}} {{end}}' <proxy-container>
-```
-
-Typical names: `web`, `proxy`, `traefik_default`, `nginx-proxy_default`.
-
-**2. Configure** in `.env.production`:
-
-```bash
-PROXY_NETWORK=web                      # the network you just found
-COMET_DOMAIN=comet.example.org
-APP_URL=https://comet.example.org
-```
-
-**3. Start with the proxy overlay:**
-
-```bash
-docker compose \
-  -f docker/production/compose.yaml \
-  -f docker/production/compose.proxy.yaml \
-  --env-file .env.production up -d
-```
-
-COMET is now reachable **only** from that network, as host `app` port `8080`.
-
-**4. Tell the existing proxy about it.** How depends on which proxy it is —
-`compose.proxy.yaml` has ready-made label blocks for Traefik and
-nginx-proxy; uncomment the one that matches. For a plain Caddy or nginx
-container, add a route pointing at `app:8080`:
-
-```caddy
-# existing Caddy container's Caddyfile
-comet.example.org {
-    reverse_proxy app:8080
-}
-```
-
-```nginx
-# existing nginx container's config
-location / {
-    proxy_pass http://app:8080;
-    proxy_set_header Host              $host;
-    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-> The proxy container must be attached to `PROXY_NETWORK` too — that is how
-> it resolves the name `app`. If it cannot, `docker network connect
-> <network> <proxy-container>` fixes it.
->
-> **Name collision:** the service is called `app`, which is generic. If the
-> other stack also has an `app` on that network, DNS is ambiguous — add a
-> network alias (e.g. `comet-app`) and point the proxy at that instead.
-
----
-
-### B (special case). Alongside OHDSI Broadsea 3
-
-Broadsea runs **Traefik v2.11** (container `traefik`) bound to 80/443. Its
-Traefik enables *both* providers — the Docker socket **and** the static file
-`traefik/routers.yml`. Broadsea's own services use the file provider; we use
-the **Docker provider via labels**, so nothing in your Broadsea checkout is
-edited and a Broadsea upgrade cannot clobber COMET's routing.
-
-> #### Use a dedicated hostname, not a path prefix
->
-> Broadsea routes everything by path on one host — `/atlas`, `/WebAPI`,
-> `/hades`, with `broadsea-content` claiming `PathPrefix(`/`)` as a
-> catch-all. Serving COMET at `/comet` would need `stripPrefix`, and that
-> **breaks the UI**: Livewire posts to `/livewire/update` at the *root*, so
-> after stripping, the browser's request goes to `/` — which Traefik hands
-> to `broadsea-content`, not COMET. Every interactive screen dies.
->
-> Give COMET its own hostname (`comet.example.org`, or a CNAME to the same
-> VM). That is a one-line DNS change and avoids the whole class of problem.
-
-**1. Confirm Broadsea's network name** (it is the project's default network,
-so it follows the directory Broadsea was cloned into):
-
-```bash
-docker inspect -f '{{range $n,$_ := .NetworkSettings.Networks}}{{$n}}{{"\n"}}{{end}}' traefik
-# typically: broadsea_default
-```
-
-**2. Confirm which entrypoint Broadsea uses** — it is named after
-`HTTP_TYPE` in Broadsea's `.env` (`http` or `https`):
-
-```bash
-grep -E '^HTTP_TYPE' /path/to/Broadsea/.env
-```
-
-**3. Configure** in `.env.production`:
-
-```bash
-PROXY_NETWORK=broadsea_default
-COMET_DOMAIN=comet.example.org
-COMET_ENTRYPOINT=http            # must match Broadsea's HTTP_TYPE
-APP_URL=http://comet.example.org # https:// if Broadsea terminates TLS
-```
-
-**4. Start with the Broadsea overlay:**
-
-```bash
-docker compose \
-  -f docker/production/compose.yaml \
-  -f docker/production/compose.broadsea.yaml \
-  --env-file .env.production up -d
-```
-
-COMET publishes **no host ports**. Traefik discovers it by label and routes
-`Host(comet.example.org)` to `app:8080` over Broadsea's network. The app also
-gets the network alias `comet-app`, since `app` is generic on a shared
-network.
-
-**5. Verify:**
-
-```bash
-# Traefik should list a router called "comet"
-curl -s http://<broadsea-host>/api/http/routers | grep -o '"name":"comet[^"]*"'
-
-curl -I http://comet.example.org/up      # expect 200
-```
-
-> **TLS:** COMET inherits whatever Broadsea does. If Broadsea runs
-> `HTTP_TYPE=https`, its Traefik needs a certificate valid for
-> `comet.example.org` too — a SAN/wildcard cert, or an added cert entry in
-> Broadsea's `traefik/tls_https.yml`. If Broadsea is HTTP-only, COMET is
-> HTTP-only, which is **not acceptable for real data** — fix that at the
-> Broadsea layer so both benefit.
-
-**Why they belong together:** COMET produces the `SOURCE_TO_CONCEPT_MAP` that
-drives the ETL populating the OMOP CDM — the same CDM that Broadsea's ATLAS
-and WebAPI query. Mapping and analysis on one host is a coherent setup, not a
-coincidence.
-
----
-
-### C. A host nginx / Apache owns 80
-
-Keep the app on loopback and proxy to it from the host:
-
-```bash
-# .env.production
-HTTP_PORT=127.0.0.1:8080
-```
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name comet.example.org;
-    ssl_certificate     /etc/letsencrypt/live/comet.example.org/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/comet.example.org/privkey.pem;
-
-    client_max_body_size 64m;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 300s;
-    }
-}
-```
-
----
-
-### D. A spare IP is available
-
-If the VM has a second address, give Caddy that one and leave the existing
-service on the primary. No overlay changes needed — `HTTP_PORT` and the
-Caddy ports both accept an IP prefix:
-
-```bash
-# .env.production
-HTTP_PORT=127.0.0.1:8080
-```
-
-Then bind Caddy's ports to the spare IP by adding a tiny third file:
-
-```yaml
-# docker/production/compose.caddy-ip.yaml
-services:
-  caddy:
-    ports: !override
-      - "10.0.0.5:80:80"
-      - "10.0.0.5:443:443"
-```
+Caddy takes 80/443, proxies to `app:8080` over the internal network, and
+issues the certificate on first request. Watch it happen:
 
 ```bash
 docker compose -f docker/production/compose.yaml \
                -f docker/production/compose.caddy.yaml \
-               -f docker/production/compose.caddy-ip.yaml \
-               --env-file .env.production up -d
+               --env-file .env.production logs -f caddy
 ```
 
----
+> Certificates live in the `caddy_data` volume. **Do not delete that volume** —
+> re-issuing repeatedly hits Let's Encrypt rate limits (5 duplicate
+> certificates per week).
 
-### Whichever you chose
+Because the overlay is a second `-f`, every later command needs both files.
+Fold that into the alias:
 
-The container's nginx already honours `X-Forwarded-*`, so Laravel emits
-correct `https://` links once the proxy sets them. Verify end to end:
+```bash
+alias comet='docker compose -f docker/production/compose.yaml -f docker/production/compose.caddy.yaml --env-file .env.production'
+```
+
+**4. Verify end to end.** The container's nginx already honours
+`X-Forwarded-*`, so Laravel emits correct `https://` links once Caddy sets
+them:
 
 ```bash
 curl -I https://comet.example.org/up      # expect 200
 ```
 
-Fold the extra `-f` files into your alias so later commands keep working:
-
-```bash
-alias comet='docker compose -f docker/production/compose.yaml -f docker/production/compose.proxy.yaml --env-file .env.production'
-```
-
----
 
 ## Run at boot (systemd)
 
@@ -868,6 +680,222 @@ git status --short   # no .env.production, no secrets/, no dumps
 
 ---
 
+## Alternative environments
+
+The deployment above assumes a **dedicated server with nothing else on ports
+80/443**. If COMET has to share a host, pick the matching case below.
+
+### Another container already owns port 80
+
+This is the common case on a shared VM. Do **not** use the Caddy overlay —
+it would fight for port 80. Instead COMET publishes **no host ports at all**
+and the existing proxy reaches it over a shared Docker network.
+
+**1. Find the proxy's network:**
+
+```bash
+docker ps                                  # identify the proxy container
+docker inspect -f '{{range $n,$_ := .NetworkSettings.Networks}}{{$n}} {{end}}' <proxy-container>
+```
+
+Typical names: `web`, `proxy`, `traefik_default`, `nginx-proxy_default`.
+
+**2. Configure** in `.env.production`:
+
+```bash
+PROXY_NETWORK=web                      # the network you just found
+COMET_DOMAIN=comet.example.org
+APP_URL=https://comet.example.org
+```
+
+**3. Start with the proxy overlay:**
+
+```bash
+docker compose \
+  -f docker/production/compose.yaml \
+  -f docker/production/compose.proxy.yaml \
+  --env-file .env.production up -d
+```
+
+COMET is now reachable **only** from that network, as host `app` port `8080`.
+
+**4. Tell the existing proxy about it.** How depends on which proxy it is —
+`compose.proxy.yaml` has ready-made label blocks for Traefik and
+nginx-proxy; uncomment the one that matches. For a plain Caddy or nginx
+container, add a route pointing at `app:8080`:
+
+```caddy
+# existing Caddy container's Caddyfile
+comet.example.org {
+    reverse_proxy app:8080
+}
+```
+
+```nginx
+# existing nginx container's config
+location / {
+    proxy_pass http://app:8080;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+> The proxy container must be attached to `PROXY_NETWORK` too — that is how
+> it resolves the name `app`. If it cannot, `docker network connect
+> <network> <proxy-container>` fixes it.
+>
+> **Name collision:** the service is called `app`, which is generic. If the
+> other stack also has an `app` on that network, DNS is ambiguous — add a
+> network alias (e.g. `comet-app`) and point the proxy at that instead.
+
+---
+
+### Alongside OHDSI Broadsea 3
+
+Broadsea runs **Traefik v2.11** (container `traefik`) bound to 80/443. Its
+Traefik enables *both* providers — the Docker socket **and** the static file
+`traefik/routers.yml`. Broadsea's own services use the file provider; we use
+the **Docker provider via labels**, so nothing in your Broadsea checkout is
+edited and a Broadsea upgrade cannot clobber COMET's routing.
+
+> #### Use a dedicated hostname, not a path prefix
+>
+> Broadsea routes everything by path on one host — `/atlas`, `/WebAPI`,
+> `/hades`, with `broadsea-content` claiming `PathPrefix(`/`)` as a
+> catch-all. Serving COMET at `/comet` would need `stripPrefix`, and that
+> **breaks the UI**: Livewire posts to `/livewire/update` at the *root*, so
+> after stripping, the browser's request goes to `/` — which Traefik hands
+> to `broadsea-content`, not COMET. Every interactive screen dies.
+>
+> Give COMET its own hostname (`comet.example.org`, or a CNAME to the same
+> VM). That is a one-line DNS change and avoids the whole class of problem.
+
+**1. Confirm Broadsea's network name** (it is the project's default network,
+so it follows the directory Broadsea was cloned into):
+
+```bash
+docker inspect -f '{{range $n,$_ := .NetworkSettings.Networks}}{{$n}}{{"\n"}}{{end}}' traefik
+# typically: broadsea_default
+```
+
+**2. Confirm which entrypoint Broadsea uses** — it is named after
+`HTTP_TYPE` in Broadsea's `.env` (`http` or `https`):
+
+```bash
+grep -E '^HTTP_TYPE' /path/to/Broadsea/.env
+```
+
+**3. Configure** in `.env.production`:
+
+```bash
+PROXY_NETWORK=broadsea_default
+COMET_DOMAIN=comet.example.org
+COMET_ENTRYPOINT=http            # must match Broadsea's HTTP_TYPE
+APP_URL=http://comet.example.org # https:// if Broadsea terminates TLS
+```
+
+**4. Start with the Broadsea overlay:**
+
+```bash
+docker compose \
+  -f docker/production/compose.yaml \
+  -f docker/production/compose.broadsea.yaml \
+  --env-file .env.production up -d
+```
+
+COMET publishes **no host ports**. Traefik discovers it by label and routes
+`Host(comet.example.org)` to `app:8080` over Broadsea's network. The app also
+gets the network alias `comet-app`, since `app` is generic on a shared
+network.
+
+**5. Verify:**
+
+```bash
+# Traefik should list a router called "comet"
+curl -s http://<broadsea-host>/api/http/routers | grep -o '"name":"comet[^"]*"'
+
+curl -I http://comet.example.org/up      # expect 200
+```
+
+> **TLS:** COMET inherits whatever Broadsea does. If Broadsea runs
+> `HTTP_TYPE=https`, its Traefik needs a certificate valid for
+> `comet.example.org` too — a SAN/wildcard cert, or an added cert entry in
+> Broadsea's `traefik/tls_https.yml`. If Broadsea is HTTP-only, COMET is
+> HTTP-only, which is **not acceptable for real data** — fix that at the
+> Broadsea layer so both benefit.
+
+**Why they belong together:** COMET produces the `SOURCE_TO_CONCEPT_MAP` that
+drives the ETL populating the OMOP CDM — the same CDM that Broadsea's ATLAS
+and WebAPI query. Mapping and analysis on one host is a coherent setup, not a
+coincidence.
+
+---
+
+### A host nginx / Apache owns port 80
+
+Keep the app on loopback and proxy to it from the host:
+
+```bash
+# .env.production
+HTTP_PORT=127.0.0.1:8080
+```
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name comet.example.org;
+    ssl_certificate     /etc/letsencrypt/live/comet.example.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/comet.example.org/privkey.pem;
+
+    client_max_body_size 64m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+---
+
+### A spare IP is available
+
+If the VM has a second address, give Caddy that one and leave the existing
+service on the primary. No overlay changes needed — `HTTP_PORT` and the
+Caddy ports both accept an IP prefix:
+
+```bash
+# .env.production
+HTTP_PORT=127.0.0.1:8080
+```
+
+Then bind Caddy's ports to the spare IP by adding a tiny third file:
+
+```yaml
+# docker/production/compose.caddy-ip.yaml
+services:
+  caddy:
+    ports: !override
+      - "10.0.0.5:80:80"
+      - "10.0.0.5:443:443"
+```
+
+```bash
+docker compose -f docker/production/compose.yaml \
+               -f docker/production/compose.caddy.yaml \
+               -f docker/production/compose.caddy-ip.yaml \
+               --env-file .env.production up -d
+```
+
+---
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -885,7 +913,7 @@ git status --short   # no .env.production, no secrets/, no dumps
 | `docker compose` → "is not a docker command" | Compose v2 plugin missing (common on 20.04) | install `docker-compose-plugin`; v1 `docker-compose` will not work |
 | `permission denied ... docker.sock` | user not in the `docker` group | `sudo usermod -aG docker $USER`, then log out and back in |
 | Caddy: "no acme server" / challenge fails | DNS not pointing at the VM, or 80/443 blocked | `dig +short $COMET_DOMAIN`; open 80 **and** 443 |
-| `port is already allocated` on 80/443 | something else owns the port | you want option **B**, not the Caddy overlay — see [TLS and port 80](#tls-and-port-80) |
+| `port is already allocated` on 80/443 | something else owns the port | do not use the Caddy overlay — see [Alternative environments](#alternative-environments) |
 | `network <name> declared as external, but could not be found` | wrong `PROXY_NETWORK` | `docker network ls`; use the proxy's actual network |
 | Proxy returns 502; `host not found in upstream "app"` | proxy not attached to the shared network | `docker network connect $PROXY_NETWORK <proxy-container>` |
 | Proxy reaches the *wrong* app | another service on that network is also named `app` | add a network alias for COMET and target that |

@@ -11,10 +11,13 @@ versioning, custom 2-billion concepts).
 
 ## Start here
 
-- **Setting up / resuming on a new machine → [`../RESUME.md`](../RESUME.md).**
+- **Deploying to a server → [`docker/production/README.md`](docker/production/README.md)** —
+  Docker Compose, TLS, backups, upgrades. Start there for anything production-bound.
+- **Local dev / resuming on a new machine → [`../RESUME.md`](../RESUME.md).**
 - Vocabulary loading & Canadian extensions → [`docs/vocab-refresh.md`](docs/vocab-refresh.md)
 - Mapper workflow → [`docs/mapper-guide.md`](docs/mapper-guide.md)
 - Reviewer workflow → [`docs/reviewer-guide.md`](docs/reviewer-guide.md)
+- Deploying to Azure instead → [`docs/azure-deploy.md`](docs/azure-deploy.md)
 
 ## Quick reference
 
@@ -32,3 +35,18 @@ App: http://localhost:8081 · Stack: nginx → php-fpm 8.4 → Postgres 16 + Red
 
 Roles: `mapper` / `importer` / `reviewer` / `portal_admin` — new SSO users get
 none until a portal admin grants them (User Administration).
+
+## Deployment at a glance
+
+Production runs from one image in three roles (`app` / `queue` / `migrate`),
+built by `docker/production/Dockerfile`:
+
+```bash
+# on the server, from modern/
+alias comet='docker compose -f docker/production/compose.yaml -f docker/production/compose.caddy.yaml --env-file .env.production'
+comet build && comet up -d
+comet ps          # `migrate` showing exited (0) is success
+```
+
+Full walkthrough — server prep, secrets, TLS, systemd, backups, upgrades — in
+[`docker/production/README.md`](docker/production/README.md).
