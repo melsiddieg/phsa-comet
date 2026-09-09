@@ -2,17 +2,10 @@
 
 Drop `.crt` files here (PEM format) when the network uses **TLS inspection**.
 
-The build appends everything here to the image's CA bundle *before* any `apk`
-call, and sets `SSL_CERT_FILE` to that bundle so apk actually honours it.
-Leaving this directory empty is fine — the build is unchanged.
-
-> **Quicker alternative:** `APK_HTTP=1 comet build` sidesteps TLS for package
-> downloads entirely. That is safe — apk verifies packages against the signing
-> keys in `/etc/apk/keys`, so integrity does not rely on TLS.
-
-> **Why not just append to the bundle?** apk-tools 3 reads the
-> `/etc/ssl/certs` *directory* (hashed certs), not the bundle file. Appending
-> alone has no effect, which is why the Dockerfile also sets `SSL_CERT_FILE`.
+On this (Debian) image the build copies everything here into
+`/usr/local/share/ca-certificates/` and runs `update-ca-certificates`, the
+standard Debian flow — no `SSL_CERT_FILE` gymnastics required. Leaving the
+directory empty is fine; the build is unchanged.
 
 ## Symptom this solves
 

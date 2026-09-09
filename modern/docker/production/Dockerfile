@@ -1,45 +1,44 @@
 # syntax=docker/dockerfile:1
 # ---------------------------------------------------------------------------
-# COMET production image — self-contained, Azure-ready.
+# COMET production image — Debian (bookworm) variant.
+#
+# Identical to the Alpine image in behaviour; the only reason this exists is
+# package-mirror reachability. Networks that block dl-cdn.alpinelinux.org
+# often allow deb.debian.org, so this build can succeed where the Alpine one
+# cannot. Check first:
+#
+#   docker run --rm debian:bookworm-slim \
+#     sh -c 'apt-get update >/dev/null && echo MIRROR-OK'
 #
 #   docker build -f docker/production/Dockerfile -t comet:latest .
 #
-# One image, two roles (CONTAINER_ROLE env):
-#   app    → nginx + php-fpm on :8080 (default)
-#   queue  → php artisan queue:work
+# One image, three roles (CONTAINER_ROLE env):
+#   app      → nginx + php-fpm on :8080 (default)
+#   queue    → php artisan queue:work
+#   migrate  → run migrations once, exit 0
 #
 # Unlike the dev compose stack, code is BAKED IN — no bind mounts.
 # ---------------------------------------------------------------------------
 
 # ---- Stage 1: vendor/ via composer (no dev deps) --------------------------
-FROM php:8.4-cli-alpine AS vendor
+FROM php:8.4-cli AS vendor
 
-# --- Restricted-network support (both are no-ops by default) ----------------
-# 1. Corporate CA: drop .crt files in docker/production/ca-certs/ when the
-#    network does TLS inspection.  apk-tools 3 reads the /etc/ssl/certs
-#    DIRECTORY, not the bundle, so we also point SSL_CERT_FILE at the bundle
-#    we append to — that is what makes apk (and PHP at runtime) trust it.
-# 2. APK_HTTP=1 switches Alpine repos to plain HTTP, for networks whose TLS
-#    interception cannot be satisfied. This is SAFE: apk verifies every index
-#    and package against the signing keys in /etc/apk/keys, so integrity does
-#    not depend on TLS. See docker/production/ca-certs/README.md.
-ARG APK_HTTP=0
-ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-COPY docker/production/ca-certs/ /tmp/ca-certs/
-RUN set -eu; \
-    if ls /tmp/ca-certs/*.crt >/dev/null 2>&1; then \
-      cat /tmp/ca-certs/*.crt >> /etc/ssl/certs/ca-certificates.crt; \
-      echo ">> Added corporate CA(s) to $SSL_CERT_FILE"; \
-    fi; \
-    rm -rf /tmp/ca-certs; \
-    if [ "$APK_HTTP" = "1" ]; then \
-      sed -i 's|https://|http://|g' /etc/apk/repositories; \
-      echo ">> apk switched to plain HTTP (packages stay signature-verified)"; \
+# Optional corporate CA, for networks doing TLS inspection. Empty by default.
+# On Debian this is the standard flow: drop certs in, run update-ca-certificates.
+COPY docker/production/ca-certs/ /usr/local/share/ca-certificates/
+RUN set -eux; \
+    if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then \
+      update-ca-certificates; \
+      echo ">> Added corporate CA(s) to the system trust store"; \
     fi
 
-RUN apk add --no-cache icu-dev libzip-dev postgresql-dev linux-headers git unzip \
- && docker-php-ext-configure intl \
- && docker-php-ext-install -j$(nproc) intl pdo_pgsql zip pcntl
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        libicu-dev libzip-dev libpq-dev git unzip; \
+    docker-php-ext-configure intl; \
+    docker-php-ext-install -j"$(nproc)" intl pdo_pgsql zip pcntl; \
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
@@ -55,39 +54,41 @@ RUN mkdir -p bootstrap/cache storage/framework/cache/data storage/framework/sess
  && composer dump-autoload --optimize --no-dev --classmap-authoritative
 
 # ---- Stage 2: runtime ------------------------------------------------------
-FROM php:8.4-fpm-alpine
+FROM php:8.4-fpm
 
-# --- Restricted-network support (both are no-ops by default) ----------------
-# 1. Corporate CA: drop .crt files in docker/production/ca-certs/ when the
-#    network does TLS inspection.  apk-tools 3 reads the /etc/ssl/certs
-#    DIRECTORY, not the bundle, so we also point SSL_CERT_FILE at the bundle
-#    we append to — that is what makes apk (and PHP at runtime) trust it.
-# 2. APK_HTTP=1 switches Alpine repos to plain HTTP, for networks whose TLS
-#    interception cannot be satisfied. This is SAFE: apk verifies every index
-#    and package against the signing keys in /etc/apk/keys, so integrity does
-#    not depend on TLS. See docker/production/ca-certs/README.md.
-ARG APK_HTTP=0
-ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-COPY docker/production/ca-certs/ /tmp/ca-certs/
-RUN set -eu; \
-    if ls /tmp/ca-certs/*.crt >/dev/null 2>&1; then \
-      cat /tmp/ca-certs/*.crt >> /etc/ssl/certs/ca-certificates.crt; \
-      echo ">> Added corporate CA(s) to $SSL_CERT_FILE"; \
-    fi; \
-    rm -rf /tmp/ca-certs; \
-    if [ "$APK_HTTP" = "1" ]; then \
-      sed -i 's|https://|http://|g' /etc/apk/repositories; \
-      echo ">> apk switched to plain HTTP (packages stay signature-verified)"; \
+COPY docker/production/ca-certs/ /usr/local/share/ca-certificates/
+RUN set -eux; \
+    if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then \
+      update-ca-certificates; \
+      echo ">> Added corporate CA(s) to the system trust store"; \
     fi
 
-RUN apk add --no-cache icu-dev libzip-dev postgresql-dev linux-headers \
-      nginx supervisor \
- && docker-php-ext-configure intl \
- && docker-php-ext-install -j$(nproc) intl pdo_pgsql pgsql zip opcache pcntl \
- && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
- && pecl install redis \
- && docker-php-ext-enable redis \
- && apk del .build-deps
+# Build the PHP extensions, then drop the build-only packages again. This is
+# the upstream docker-php pattern: mark everything auto, re-mark what we want
+# to keep (including the runtime libs the built .so files actually link
+# against), then autoremove the rest.
+RUN set -eux; \
+    apt-get update; \
+    savedAptMark="$(apt-mark showmanual)"; \
+    apt-get install -y --no-install-recommends \
+        libicu-dev libzip-dev libpq-dev $PHPIZE_DEPS; \
+    apt-get install -y --no-install-recommends nginx supervisor; \
+    docker-php-ext-configure intl; \
+    docker-php-ext-install -j"$(nproc)" intl pdo_pgsql pgsql zip opcache pcntl; \
+    pecl install redis; \
+    docker-php-ext-enable redis; \
+    pecl clear-cache; \
+    apt-mark auto '.*' > /dev/null; \
+    apt-mark manual $savedAptMark nginx supervisor > /dev/null; \
+    ldd "$(php -r 'echo ini_get("extension_dir");')"/*.so \
+      | awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) next; gsub("^/(usr/)?", "", so); printf "*/%s\n", so }' \
+      | sort -u \
+      | xargs -r dpkg-query --search 2>/dev/null \
+      | cut -d: -f1 \
+      | sort -u \
+      | xargs -r apt-mark manual > /dev/null; \
+    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
+    rm -rf /var/lib/apt/lists/*
 
 # Production PHP configuration
 RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
@@ -103,8 +104,9 @@ WORKDIR /var/www/html
 COPY --from=vendor --chown=www-data:www-data /app /var/www/html
 
 # Laravel writable paths; nginx temp paths
-RUN mkdir -p storage/framework/{cache/data,sessions,views} storage/logs bootstrap/cache \
-      /var/lib/nginx/tmp /var/log/nginx /run/nginx \
+RUN mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views \
+             storage/logs bootstrap/cache \
+             /var/lib/nginx/tmp /var/log/nginx /run/nginx \
  && chown -R www-data:www-data storage bootstrap/cache /var/lib/nginx /var/log/nginx /run/nginx
 
 COPY docker/production/entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -117,6 +119,6 @@ EXPOSE 8080
 
 # Laravel's built-in health route (bootstrap/app.php → health: '/up')
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD sh -c 'if [ "$CONTAINER_ROLE" = "app" ]; then wget -q -O /dev/null http://127.0.0.1:${PORT}/up || exit 1; else pgrep -f "queue:work" >/dev/null || exit 1; fi'
+  CMD sh -c 'if [ "$CONTAINER_ROLE" = "app" ]; then curl -fsS http://127.0.0.1:${PORT}/up >/dev/null || exit 1; else pgrep -f "queue:work" >/dev/null || exit 1; fi'
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
