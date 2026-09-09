@@ -710,6 +710,7 @@ rebuild. Otherwise the warning text tells you which fix you need:
 | `TLS: unspecified error` | **TLS-inspecting proxy** — its certificate is not trusted inside containers | [Fix 1](#fix-1--switch-apk-to-plain-http-fastest-and-safe) or [Fix 2](#fix-2--trust-the-inspecting-proxys-ca) |
 | `DNS: ... error` | container DNS cannot resolve | [Fix 4](#fix-4--fix-dns-for-containers) |
 | `temporary error` / timeouts | egress needs a proxy | [Fix 3](#fix-3--forward-your-proxy-into-the-build) |
+| `HTTP 503` after `APK_HTTP=1` | proxy refuses plain HTTP too — both routes blocked | [Fix 5](#fix-5--do-not-build-on-the-server-guaranteed) |
 
 ### Fix 1 — switch apk to plain HTTP (fastest, and safe)
 
@@ -780,27 +781,77 @@ echo '{ "dns": ["10.0.0.10", "1.1.1.1"] }' | sudo tee /etc/docker/daemon.json
 sudo systemctl restart docker
 ```
 
-### Fix 5 — do not build on the server at all
+### Fix 5 — do not build on the server (guaranteed)
 
-The most robust option when egress is locked down: build the image somewhere
-with open internet (a laptop, or the GitHub Actions workflow in
-`.github/workflows/`), push it to a registry the server *can* reach, and point
-`COMET_IMAGE` at it. No `apk` ever runs on the server.
+When the network blocks package mirrors over **both** HTTPS (TLS
+interception) and HTTP (proxy returns 503), stop trying to build there.
+`docker pull` still works — the daemon uses the host trust store — so build
+the image somewhere with open internet and pull it.
+
+#### Option A — GitHub Actions → GHCR (recommended)
+
+`.github/workflows/build-image.yml` builds on GitHub's runners (native
+amd64, open internet) and pushes to GHCR.
+
+1. **Run it:** Actions → *Build production image* → *Run workflow*
+   (or push a `v*` tag). The run summary prints the exact `COMET_IMAGE` line.
+
+2. **Check the server can reach GHCR:**
+
+   ```bash
+   curl -fsSI https://ghcr.io/v2/ >/dev/null && echo "ghcr reachable"
+   ```
+
+   Private repo? The package is private too, so log in once:
+
+   ```bash
+   echo <PAT-with-read:packages> | docker login ghcr.io -u <github-user> --password-stdin
+   ```
+
+3. **Point the stack at it** in `.env.production`:
+
+   ```bash
+   COMET_IMAGE=ghcr.io/melsiddieg/phsa-comet:latest
+   ```
+
+4. **Pull and start — never build:**
+
+   ```bash
+   comet pull
+   comet up -d --no-build
+   ```
+
+   > `--no-build` matters. The services declare both `build:` and `image:`,
+   > so a plain `up` would try to build when the image is missing locally.
+   > `pull` + `--no-build` guarantees the registry image is used.
+
+#### Option B — build on your laptop, copy the image over
+
+No registry needed. On a machine with working internet:
 
 ```bash
-# where the internet works — note the platform must match the server
-docker build --platform linux/amd64 -f docker/production/Dockerfile \
-  -t ghcr.io/melsiddieg/comet:1.0.0 .
-docker push ghcr.io/melsiddieg/comet:1.0.0
+cd modern
+# --platform is REQUIRED on Apple Silicon; the server is amd64
+docker build --platform linux/amd64 -f docker/production/Dockerfile -t comet:latest .
+docker save comet:latest | gzip | ssh you@server 'gunzip | docker load'
 ```
+
+Then on the server, with `COMET_IMAGE=comet:latest` (the default):
 
 ```bash
-# .env.production on the server
-COMET_IMAGE=ghcr.io/melsiddieg/comet:1.0.0
+comet up -d --no-build
 ```
 
-Then `comet up -d` pulls that image instead of building — the `build:` section
-is simply not used when the tag already exists locally or in the registry.
+Expect a few hundred MB over the wire, and a slow build under emulation if
+you are on Apple Silicon.
+
+#### Upgrades afterwards
+
+Rebuild via the workflow (or laptop), then on the server:
+
+```bash
+comet pull && comet up -d --no-build
+```
 
 ---
 
