@@ -460,6 +460,51 @@ curl -I https://comet.example.org/up      # expect 200
 ```
 
 
+### Temporary HTTP-only mode
+
+While waiting for a certificate you can run without TLS. **Testing only** —
+credentials and session cookies cross the network in clear text, so do not
+load real data or expose it beyond a trusted network.
+
+In `.env.production`:
+
+```bash
+COMET_OVERLAY=none                    # skip Caddy entirely
+HTTP_PORT=80                          # or 8080; see the note below
+APP_URL=http://comet.your-host        # must match how you browse to it
+AUTH_LOCAL_LOGIN=1                    # REQUIRED - see below
+```
+
+```bash
+comet up -d
+comet exec app php artisan db:seed --force     # if not already seeded
+```
+
+Then browse to `http://comet.your-host` and sign in with
+`admin@comet.local` / `change-me-now`.
+
+> **`AUTH_LOCAL_LOGIN=1` is required.** The template ships `0`, which makes
+> the break-glass login return **404** — with SSO not yet configured you
+> would have no way in at all.
+
+> **`HTTP_PORT` and the host.** `HTTP_PORT=80` is simplest: no port appears in
+> URLs. On another port, keep `APP_URL` in sync (`http://host:8080`) or links
+> and redirects will point at the wrong place. Do **not** leave `HTTP_PORT` on
+> `127.0.0.1:...` here — that only listens on loopback and is unreachable from
+> a browser on another machine.
+
+Switching back once the certificate arrives:
+
+```bash
+COMET_OVERLAY=caddy
+HTTP_PORT=127.0.0.1:8080
+APP_URL=https://comet.your-host
+COMET_TLS=tls /etc/caddy/certs/tls.crt /etc/caddy/certs/tls.key
+AUTH_LOCAL_LOGIN=0                    # once Entra SSO works
+```
+
+---
+
 ### When ACME is blocked
 
 On restricted networks Caddy cannot reach the certificate authorities:
@@ -1132,6 +1177,8 @@ docker compose -f docker/production/compose.yaml \
 | Caddy loops re-issuing certificates | `caddy_data` volume was deleted | restore/keep the volume; Let's Encrypt rate-limits duplicates |
 | Caddy: ACME `connection reset by peer` | network blocks the certificate authorities | supply your own cert — see [When ACME is blocked](#when-acme-is-blocked) |
 | Caddy requests a cert for `comet.example.org` | `COMET_DOMAIN` still the template placeholder | set it to your real hostname |
+| Login page 404s on submit | `AUTH_LOCAL_LOGIN=0` disables break-glass login | set it to `1` until SSO works |
+| Redirects drop the port (`http://host/` instead of `http://host:8080/`) | fixed — nginx now passes `$http_host` | rebuild the image if you predate this fix |
 | Site loads over HTTP but links say `http://` | `APP_URL` still `http://`, or proxy not sending `X-Forwarded-Proto` | fix `APP_URL`, then `comet up -d` |
 | `systemctl status comet` fails after reboot | wrong `WorkingDirectory` in the unit | edit `/etc/systemd/system/comet.service`, `daemon-reload` |
 
