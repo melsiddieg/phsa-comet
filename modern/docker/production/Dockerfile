@@ -119,16 +119,17 @@ RUN mkdir -p storage/framework/cache/data storage/framework/sessions storage/fra
              /var/lib/nginx/tmp /var/log/nginx /run/nginx \
  && chown -R www-data:www-data storage bootstrap/cache /var/lib/nginx /var/log/nginx /run/nginx
 
-COPY docker/production/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY docker/production/entrypoint.sh  /usr/local/bin/entrypoint.sh
+COPY docker/production/healthcheck.sh /usr/local/bin/healthcheck.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh
 
 ENV CONTAINER_ROLE=app \
     PORT=8080
 
 EXPOSE 8080
 
-# Laravel's built-in health route (bootstrap/app.php → health: '/up')
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD sh -c 'if [ "$CONTAINER_ROLE" = "app" ]; then curl -fsS http://127.0.0.1:${PORT}/up >/dev/null || exit 1; else pgrep -f "queue:work" >/dev/null || exit 1; fi'
+# Uses only PHP and /proc, so it works on any base (see healthcheck.sh).
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD ["/usr/local/bin/healthcheck.sh"]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

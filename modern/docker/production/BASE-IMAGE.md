@@ -48,6 +48,25 @@ phpize && ./configure && make && make install
 
 Bump with `--build-arg PHPREDIS_VERSION=x.y.z`.
 
+## Also: health checks without wget/pgrep
+
+The original checks were written for Alpine's busybox. Debian's `php:8.4-fpm`
+ships **neither `wget` nor `pgrep`** (nor `ps`), so both `app` and `queue`
+reported *unhealthy* while running perfectly — and Caddy, which waits on
+`app` being healthy, then refused to start:
+
+```
+dependency failed to start: container comet-app-1 is unhealthy
+```
+
+`healthcheck.sh` now does the job using only **PHP and `/proc`**, both
+guaranteed on any base:
+
+| Role | Check |
+|---|---|
+| `app` | `file_get_contents` on `/up`, asserting HTTP 200 |
+| `queue` | PID 1's cmdline still contains `queue:work` |
+
 ## What changed
 
 | | Alpine | Debian |
@@ -57,6 +76,8 @@ Bump with `--build-arg PHPREDIS_VERSION=x.y.z`.
 | `icu-dev` etc. | `icu-dev libzip-dev postgresql-dev` | `libicu-dev libzip-dev libpq-dev` |
 | Corporate CA | append to bundle + `SSL_CERT_FILE` (apk-tools 3 quirk) | `update-ca-certificates` (standard) |
 | `APK_HTTP` escape hatch | present | **removed** — not applicable |
+| Health checks | busybox `wget` / `pgrep` | `healthcheck.sh` (PHP + `/proc`) |
+| phpredis | `pecl install redis` | GitHub release tarball |
 | Image size | ~660 MB | ~657 MB |
 
 Build-only packages are removed afterwards using the upstream `docker-php`
