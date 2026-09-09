@@ -14,13 +14,27 @@
 # ---- Stage 1: vendor/ via composer (no dev deps) --------------------------
 FROM php:8.4-cli-alpine AS vendor
 
-# Optional: trust a corporate CA when the network does TLS inspection.
-# Empty by default (no-op). See docker/production/ca-certs/README.md.
-COPY docker/production/ca-certs/ /usr/local/share/ca-certificates/
+# --- Restricted-network support (both are no-ops by default) ----------------
+# 1. Corporate CA: drop .crt files in docker/production/ca-certs/ when the
+#    network does TLS inspection.  apk-tools 3 reads the /etc/ssl/certs
+#    DIRECTORY, not the bundle, so we also point SSL_CERT_FILE at the bundle
+#    we append to — that is what makes apk (and PHP at runtime) trust it.
+# 2. APK_HTTP=1 switches Alpine repos to plain HTTP, for networks whose TLS
+#    interception cannot be satisfied. This is SAFE: apk verifies every index
+#    and package against the signing keys in /etc/apk/keys, so integrity does
+#    not depend on TLS. See docker/production/ca-certs/README.md.
+ARG APK_HTTP=0
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+COPY docker/production/ca-certs/ /tmp/ca-certs/
 RUN set -eu; \
-    if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then \
-      cat /usr/local/share/ca-certificates/*.crt >> /etc/ssl/certs/ca-certificates.crt; \
-      echo "Added corporate CA(s) to the trust store"; \
+    if ls /tmp/ca-certs/*.crt >/dev/null 2>&1; then \
+      cat /tmp/ca-certs/*.crt >> /etc/ssl/certs/ca-certificates.crt; \
+      echo ">> Added corporate CA(s) to $SSL_CERT_FILE"; \
+    fi; \
+    rm -rf /tmp/ca-certs; \
+    if [ "$APK_HTTP" = "1" ]; then \
+      sed -i 's|https://|http://|g' /etc/apk/repositories; \
+      echo ">> apk switched to plain HTTP (packages stay signature-verified)"; \
     fi
 
 RUN apk add --no-cache icu-dev libzip-dev postgresql-dev linux-headers git unzip \
@@ -43,13 +57,27 @@ RUN mkdir -p bootstrap/cache storage/framework/cache/data storage/framework/sess
 # ---- Stage 2: runtime ------------------------------------------------------
 FROM php:8.4-fpm-alpine
 
-# Optional: trust a corporate CA when the network does TLS inspection.
-# Empty by default (no-op). See docker/production/ca-certs/README.md.
-COPY docker/production/ca-certs/ /usr/local/share/ca-certificates/
+# --- Restricted-network support (both are no-ops by default) ----------------
+# 1. Corporate CA: drop .crt files in docker/production/ca-certs/ when the
+#    network does TLS inspection.  apk-tools 3 reads the /etc/ssl/certs
+#    DIRECTORY, not the bundle, so we also point SSL_CERT_FILE at the bundle
+#    we append to — that is what makes apk (and PHP at runtime) trust it.
+# 2. APK_HTTP=1 switches Alpine repos to plain HTTP, for networks whose TLS
+#    interception cannot be satisfied. This is SAFE: apk verifies every index
+#    and package against the signing keys in /etc/apk/keys, so integrity does
+#    not depend on TLS. See docker/production/ca-certs/README.md.
+ARG APK_HTTP=0
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+COPY docker/production/ca-certs/ /tmp/ca-certs/
 RUN set -eu; \
-    if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then \
-      cat /usr/local/share/ca-certificates/*.crt >> /etc/ssl/certs/ca-certificates.crt; \
-      echo "Added corporate CA(s) to the trust store"; \
+    if ls /tmp/ca-certs/*.crt >/dev/null 2>&1; then \
+      cat /tmp/ca-certs/*.crt >> /etc/ssl/certs/ca-certificates.crt; \
+      echo ">> Added corporate CA(s) to $SSL_CERT_FILE"; \
+    fi; \
+    rm -rf /tmp/ca-certs; \
+    if [ "$APK_HTTP" = "1" ]; then \
+      sed -i 's|https://|http://|g' /etc/apk/repositories; \
+      echo ">> apk switched to plain HTTP (packages stay signature-verified)"; \
     fi
 
 RUN apk add --no-cache icu-dev libzip-dev postgresql-dev linux-headers \

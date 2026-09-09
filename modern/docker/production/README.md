@@ -707,32 +707,52 @@ rebuild. Otherwise the warning text tells you which fix you need:
 
 | Warning contains | Cause | Fix |
 |---|---|---|
-| `TLS: unspecified error` | **TLS-inspecting proxy** — its certificate is not trusted inside containers | [Fix 1](#fix-1--trust-the-inspecting-proxys-ca) |
-| `DNS: ... error` | container DNS cannot resolve | [Fix 3](#fix-3--fix-dns-for-containers) |
-| `temporary error` / timeouts | egress needs a proxy | [Fix 2](#fix-2--forward-your-proxy-into-the-build) |
+| `TLS: unspecified error` | **TLS-inspecting proxy** — its certificate is not trusted inside containers | [Fix 1](#fix-1--switch-apk-to-plain-http-fastest-and-safe) or [Fix 2](#fix-2--trust-the-inspecting-proxys-ca) |
+| `DNS: ... error` | container DNS cannot resolve | [Fix 4](#fix-4--fix-dns-for-containers) |
+| `temporary error` / timeouts | egress needs a proxy | [Fix 3](#fix-3--forward-your-proxy-into-the-build) |
 
-### Fix 1 — trust the inspecting proxy's CA
+### Fix 1 — switch apk to plain HTTP (fastest, and safe)
 
-This is the common case on corporate/health-authority networks. `docker pull`
-works because the **daemon** uses the host trust store, which has the
-corporate root; containers ship their own minimal CA bundle, which does not.
-
-Drop the certificate into `docker/production/ca-certs/` and rebuild — the
-Dockerfile adds anything there to the image trust store *before* the first
-`apk` call, in both build stages:
+The quickest way past TLS interception is to stop using TLS for package
+downloads:
 
 ```bash
-# easiest: reuse the host bundle, which already works
+APK_HTTP=1 comet build
+```
+
+**This does not weaken package integrity.** apk verifies every index and
+package against the Alpine signing keys in `/etc/apk/keys`; TLS provides
+confidentiality, not authenticity, for apk. Dropping to HTTP only reveals
+*which* packages are fetched — it cannot let an attacker substitute one.
+(Everything else in the stack still uses TLS normally.)
+
+You will see `>> apk switched to plain HTTP` early in the build.
+
+### Fix 2 — trust the inspecting proxy's CA
+
+Cleaner if your network also blocks plain HTTP. `docker pull` works because
+the **daemon** uses the host trust store, which has the corporate root;
+containers ship their own bundle, which does not.
+
+```bash
+# reuse the host bundle — it already works, so it contains the root
 cp /etc/ssl/certs/ca-certificates.crt docker/production/ca-certs/host-bundle.crt
 
 comet build
 ```
 
-You should see `Added corporate CA(s) to the trust store` early in the build.
+You should see `>> Added corporate CA(s) to /etc/ssl/certs/ca-certificates.crt`.
 The directory is git-ignored, so the certificate stays out of the repo. Full
 notes: [`ca-certs/README.md`](ca-certs/README.md).
 
-### Fix 2 — forward your proxy into the build
+> **Why the image sets `SSL_CERT_FILE`:** apk-tools 3 reads the
+> `/etc/ssl/certs` *directory* (hashed certs), not the bundle file — so
+> appending to the bundle alone has no effect. The Dockerfile therefore also
+> sets `SSL_CERT_FILE` to that bundle, which apk honours. The same variable
+> makes the corporate CA available to PHP at runtime, which matters if Entra
+> SSO also traverses the inspecting proxy.
+
+### Fix 3 — forward your proxy into the build
 
 `compose.yaml` already passes `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`
 through as build args. Export them and rebuild:
@@ -751,7 +771,7 @@ systemctl show docker --property=Environment
 cat /etc/systemd/system/docker.service.d/*.conf 2>/dev/null
 ```
 
-### Fix 3 — fix DNS for containers
+### Fix 4 — fix DNS for containers
 
 If the failure is DNS rather than a proxy, give the daemon resolvers that work:
 
@@ -760,7 +780,7 @@ echo '{ "dns": ["10.0.0.10", "1.1.1.1"] }' | sudo tee /etc/docker/daemon.json
 sudo systemctl restart docker
 ```
 
-### Fix 4 — do not build on the server at all
+### Fix 5 — do not build on the server at all
 
 The most robust option when egress is locked down: build the image somewhere
 with open internet (a laptop, or the GitHub Actions workflow in
@@ -1016,7 +1036,7 @@ docker compose -f docker/production/compose.yaml \
 | Disk full during vocab load | Athena data is large | free space or move the Docker data root |
 | `docker compose` → "is not a docker command" | Compose v2 plugin missing (common on 20.04) | install `docker-compose-plugin`; v1 `docker-compose` will not work |
 | Build fails: `apk add ... exit code: 6` | the build container cannot reach `dl-cdn.alpinelinux.org` — apk's exit code is the **number of packages it could not resolve** (6 = all of them) | see [Building on a restricted network](#building-on-a-restricted-network) |
-| `apk ... TLS: unspecified error` | TLS-inspecting proxy; its CA is not trusted inside containers | drop the CA into `docker/production/ca-certs/` and rebuild |
+| `apk ... TLS: unspecified error` | TLS-inspecting proxy; its CA is not trusted inside containers | rebuild with `APK_HTTP=1`, or drop the CA into `docker/production/ca-certs/` |
 | `permission denied ... docker.sock` | user not in the `docker` group | `sudo usermod -aG docker $USER`, then log out and back in |
 | Caddy: "no acme server" / challenge fails | DNS not pointing at the VM, or 80/443 blocked | `dig +short $COMET_DOMAIN`; open 80 **and** 443 |
 | `port is already allocated` on 80/443 | something else owns the port | do not use the Caddy overlay — see [Alternative environments](#alternative-environments) |

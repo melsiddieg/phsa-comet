@@ -21,6 +21,9 @@ x-app-image: &app-image
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       NO_PROXY: ${NO_PROXY:-}
+      # Set APK_HTTP=1 when TLS interception breaks apk (see README:
+      # "Building on a restricted network"). Packages remain signature-verified.
+      APK_HTTP: ${APK_HTTP:-0}
   image: ${COMET_IMAGE:-comet:latest}
 
 # Every PHP container gets the same configuration.
