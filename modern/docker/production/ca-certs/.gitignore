@@ -1,0 +1,4 @@
+# Corporate CAs are environment-specific; keep them out of the repo by default.
+*.crt
+*.pem
+!README.md

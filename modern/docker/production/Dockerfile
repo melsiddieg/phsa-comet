@@ -14,6 +14,15 @@
 # ---- Stage 1: vendor/ via composer (no dev deps) --------------------------
 FROM php:8.4-cli-alpine AS vendor
 
+# Optional: trust a corporate CA when the network does TLS inspection.
+# Empty by default (no-op). See docker/production/ca-certs/README.md.
+COPY docker/production/ca-certs/ /usr/local/share/ca-certificates/
+RUN set -eu; \
+    if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then \
+      cat /usr/local/share/ca-certificates/*.crt >> /etc/ssl/certs/ca-certificates.crt; \
+      echo "Added corporate CA(s) to the trust store"; \
+    fi
+
 RUN apk add --no-cache icu-dev libzip-dev postgresql-dev linux-headers git unzip \
  && docker-php-ext-configure intl \
  && docker-php-ext-install -j$(nproc) intl pdo_pgsql zip pcntl
@@ -33,6 +42,15 @@ RUN mkdir -p bootstrap/cache storage/framework/cache/data storage/framework/sess
 
 # ---- Stage 2: runtime ------------------------------------------------------
 FROM php:8.4-fpm-alpine
+
+# Optional: trust a corporate CA when the network does TLS inspection.
+# Empty by default (no-op). See docker/production/ca-certs/README.md.
+COPY docker/production/ca-certs/ /usr/local/share/ca-certificates/
+RUN set -eu; \
+    if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then \
+      cat /usr/local/share/ca-certificates/*.crt >> /etc/ssl/certs/ca-certificates.crt; \
+      echo "Added corporate CA(s) to the trust store"; \
+    fi
 
 RUN apk add --no-cache icu-dev libzip-dev postgresql-dev linux-headers \
       nginx supervisor \

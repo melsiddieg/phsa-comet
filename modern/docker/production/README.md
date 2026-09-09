@@ -702,11 +702,37 @@ i.e. it reached no repository at all.
 docker run --rm alpine:3 sh -c 'apk update && echo NETWORK-OK'
 ```
 
-If that prints `NETWORK-OK`, the network is fine and the failure was
-transient — just rebuild. If it warns about `dl-cdn.alpinelinux.org`, pick a
-fix below.
+`NETWORK-OK` means the network is fine and the failure was transient — just
+rebuild. Otherwise the warning text tells you which fix you need:
 
-### Fix 1 — forward your proxy into the build
+| Warning contains | Cause | Fix |
+|---|---|---|
+| `TLS: unspecified error` | **TLS-inspecting proxy** — its certificate is not trusted inside containers | [Fix 1](#fix-1--trust-the-inspecting-proxys-ca) |
+| `DNS: ... error` | container DNS cannot resolve | [Fix 3](#fix-3--fix-dns-for-containers) |
+| `temporary error` / timeouts | egress needs a proxy | [Fix 2](#fix-2--forward-your-proxy-into-the-build) |
+
+### Fix 1 — trust the inspecting proxy's CA
+
+This is the common case on corporate/health-authority networks. `docker pull`
+works because the **daemon** uses the host trust store, which has the
+corporate root; containers ship their own minimal CA bundle, which does not.
+
+Drop the certificate into `docker/production/ca-certs/` and rebuild — the
+Dockerfile adds anything there to the image trust store *before* the first
+`apk` call, in both build stages:
+
+```bash
+# easiest: reuse the host bundle, which already works
+cp /etc/ssl/certs/ca-certificates.crt docker/production/ca-certs/host-bundle.crt
+
+comet build
+```
+
+You should see `Added corporate CA(s) to the trust store` early in the build.
+The directory is git-ignored, so the certificate stays out of the repo. Full
+notes: [`ca-certs/README.md`](ca-certs/README.md).
+
+### Fix 2 — forward your proxy into the build
 
 `compose.yaml` already passes `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`
 through as build args. Export them and rebuild:
@@ -725,7 +751,7 @@ systemctl show docker --property=Environment
 cat /etc/systemd/system/docker.service.d/*.conf 2>/dev/null
 ```
 
-### Fix 2 — fix DNS for containers
+### Fix 3 — fix DNS for containers
 
 If the failure is DNS rather than a proxy, give the daemon resolvers that work:
 
@@ -734,7 +760,7 @@ echo '{ "dns": ["10.0.0.10", "1.1.1.1"] }' | sudo tee /etc/docker/daemon.json
 sudo systemctl restart docker
 ```
 
-### Fix 3 — do not build on the server at all
+### Fix 4 — do not build on the server at all
 
 The most robust option when egress is locked down: build the image somewhere
 with open internet (a laptop, or the GitHub Actions workflow in
@@ -990,6 +1016,7 @@ docker compose -f docker/production/compose.yaml \
 | Disk full during vocab load | Athena data is large | free space or move the Docker data root |
 | `docker compose` → "is not a docker command" | Compose v2 plugin missing (common on 20.04) | install `docker-compose-plugin`; v1 `docker-compose` will not work |
 | Build fails: `apk add ... exit code: 6` | the build container cannot reach `dl-cdn.alpinelinux.org` — apk's exit code is the **number of packages it could not resolve** (6 = all of them) | see [Building on a restricted network](#building-on-a-restricted-network) |
+| `apk ... TLS: unspecified error` | TLS-inspecting proxy; its CA is not trusted inside containers | drop the CA into `docker/production/ca-certs/` and rebuild |
 | `permission denied ... docker.sock` | user not in the `docker` group | `sudo usermod -aG docker $USER`, then log out and back in |
 | Caddy: "no acme server" / challenge fails | DNS not pointing at the VM, or 80/443 blocked | `dig +short $COMET_DOMAIN`; open 80 **and** 443 |
 | `port is already allocated` on 80/443 | something else owns the port | do not use the Caddy overlay — see [Alternative environments](#alternative-environments) |
