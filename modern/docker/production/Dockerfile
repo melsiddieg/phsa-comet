@@ -63,6 +63,12 @@ RUN set -eux; \
       echo ">> Added corporate CA(s) to the system trust store"; \
     fi
 
+# phpredis is built from its GitHub release tarball rather than installed with
+# `pecl install redis`. pecl.php.net is a separate host that some networks
+# block or TLS-intercept, whereas github.com is reachable wherever this repo
+# can be cloned. Override with --build-arg PHPREDIS_VERSION=x.y.z.
+ARG PHPREDIS_VERSION=6.3.0
+
 # Build the PHP extensions, then drop the build-only packages again. This is
 # the upstream docker-php pattern: mark everything auto, re-mark what we want
 # to keep (including the runtime libs the built .so files actually link
@@ -71,13 +77,17 @@ RUN set -eux; \
     apt-get update; \
     savedAptMark="$(apt-mark showmanual)"; \
     apt-get install -y --no-install-recommends \
-        libicu-dev libzip-dev libpq-dev $PHPIZE_DEPS; \
+        libicu-dev libzip-dev libpq-dev curl ca-certificates $PHPIZE_DEPS; \
     apt-get install -y --no-install-recommends nginx supervisor; \
     docker-php-ext-configure intl; \
     docker-php-ext-install -j"$(nproc)" intl pdo_pgsql pgsql zip opcache pcntl; \
-    pecl install redis; \
+    curl -fsSL "https://github.com/phpredis/phpredis/archive/refs/tags/${PHPREDIS_VERSION}.tar.gz" \
+      -o /tmp/phpredis.tar.gz; \
+    mkdir -p /tmp/phpredis; \
+    tar -xzf /tmp/phpredis.tar.gz -C /tmp/phpredis --strip-components=1; \
+    ( cd /tmp/phpredis && phpize && ./configure && make -j"$(nproc)" && make install ); \
     docker-php-ext-enable redis; \
-    pecl clear-cache; \
+    rm -rf /tmp/phpredis /tmp/phpredis.tar.gz; \
     apt-mark auto '.*' > /dev/null; \
     apt-mark manual $savedAptMark nginx supervisor > /dev/null; \
     ldd "$(php -r 'echo ini_get("extension_dir");')"/*.so \

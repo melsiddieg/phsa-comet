@@ -28,6 +28,26 @@ docker run --rm debian:bookworm-slim sh -c 'apt-get update >/dev/null && echo MI
 - Errors → Debian is blocked too; use the prebuilt-image route (Fix 5 in the
   deployment README) rather than switching bases.
 
+## Also: phpredis without pecl.php.net
+
+`pecl install redis` fails on this network with:
+
+```
+No releases available for package "pecl.php.net/redis"
+```
+
+`pecl.php.net` is another host the proxy blocks — apt works, pecl does not.
+The Dockerfile therefore builds phpredis from its **GitHub release tarball**
+instead, since github.com is reachable wherever this repo can be cloned:
+
+```dockerfile
+ARG PHPREDIS_VERSION=6.3.0
+curl -fsSL https://github.com/phpredis/phpredis/archive/refs/tags/${PHPREDIS_VERSION}.tar.gz ...
+phpize && ./configure && make && make install
+```
+
+Bump with `--build-arg PHPREDIS_VERSION=x.y.z`.
+
 ## What changed
 
 | | Alpine | Debian |
