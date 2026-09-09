@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# COMET — docker compose wrapper.
+#
+# Saves retyping the -f/--env-file flags. Every `comet ...` command in the
+# deployment README works through this script.
+#
+#   ./docker/production/comet up -d
+#   ./docker/production/comet logs -f app
+#
+# Install once so it works from anywhere:
+#   sudo ln -sf /opt/comet/modern/docker/production/comet /usr/local/bin/comet
+#
+# Which TLS/proxy overlay to include (default: caddy):
+#   COMET_OVERLAY=caddy | proxy | broadsea | none
+# Put it in .env.production and it is picked up automatically.
+set -euo pipefail
+
+# Resolve this script through symlinks, then walk up to modern/
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    [[ $src != /* ]] && src="$dir/$src"
+done
+here="$(cd -P "$(dirname "$src")" && pwd)"
+modern="$(cd "$here/../.." && pwd)"
+cd "$modern"
+
+env_file="${COMET_ENV_FILE:-.env.production}"
+if [ ! -f "$env_file" ]; then
+    echo "comet: $modern/$env_file not found." >&2
+    echo "       cp docker/production/.env.production.example $env_file" >&2
+    exit 1
+fi
+
+# COMET_OVERLAY may be set in the environment or in .env.production
+overlay="${COMET_OVERLAY:-}"
+if [ -z "$overlay" ]; then
+    overlay="$(grep -E '^[[:space:]]*COMET_OVERLAY=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'"' \r' || true)"
+fi
+overlay="${overlay:-caddy}"
+
+files=(-f docker/production/compose.yaml)
+case "$overlay" in
+    caddy)    files+=(-f docker/production/compose.caddy.yaml) ;;
+    proxy)    files+=(-f docker/production/compose.proxy.yaml) ;;
+    broadsea) files+=(-f docker/production/compose.broadsea.yaml) ;;
+    none)     ;;
+    *)
+        echo "comet: unknown COMET_OVERLAY '$overlay' (caddy|proxy|broadsea|none)" >&2
+        exit 2
+        ;;
+esac
+
+if [ "${COMET_DEBUG:-0}" = "1" ]; then
+    echo "comet: dir=$modern overlay=$overlay env=$env_file" >&2
+    echo "comet: docker compose ${files[*]} --env-file $env_file $*" >&2
+fi
+
+exec docker compose "${files[@]}" --env-file "$env_file" "$@"

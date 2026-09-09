@@ -43,10 +43,13 @@ built by `docker/production/Dockerfile`:
 
 ```bash
 # on the server, from modern/
-alias comet='docker compose -f docker/production/compose.yaml -f docker/production/compose.caddy.yaml --env-file .env.production'
-comet build && comet up -d
-comet ps          # `migrate` showing exited (0) is success
+./docker/production/comet build
+./docker/production/comet up -d
+./docker/production/comet ps    # `migrate` showing exited (0) is success
 ```
+
+The `comet` wrapper supplies the compose files and env file; symlink it into
+`/usr/local/bin` to use it from anywhere.
 
 Full walkthrough — server prep, secrets, TLS, systemd, backups, upgrades — in
 [`docker/production/README.md`](docker/production/README.md).

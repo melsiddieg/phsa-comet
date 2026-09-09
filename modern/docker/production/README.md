@@ -46,7 +46,7 @@ $EDITOR .env.production                              # set APP_KEY, APP_URL,
                                                      # HTTP_PORT=127.0.0.1:8080
 
 # --- 3. build + start with TLS ----------------------------------------
-alias comet='docker compose -f docker/production/compose.yaml -f docker/production/compose.caddy.yaml --env-file .env.production'
+sudo ln -sf "$PWD/docker/production/comet" /usr/local/bin/comet   # `comet` from anywhere
 comet build
 comet up -d
 comet ps                                             # migrate should show exited (0)
@@ -366,15 +366,32 @@ set `AUTH_LOCAL_LOGIN=0`.
 
 ---
 
-### Shell shortcut
+### The `comet` wrapper
 
-The full command is long. Define it once per session:
+Every command below is written as `comet ...`. That is the wrapper shipped in
+this directory — it supplies the `-f` files and `--env-file` for you, so the
+documented commands work verbatim:
 
 ```bash
-alias comet='docker compose -f docker/production/compose.yaml --env-file .env.production'
+./docker/production/comet ps
 ```
 
-The rest of this README uses `comet` to mean exactly that.
+Install it once so it works from any directory:
+
+```bash
+sudo ln -sf /opt/comet/modern/docker/production/comet /usr/local/bin/comet
+comet ps
+```
+
+It picks the overlay from `COMET_OVERLAY` in `.env.production`
+(`caddy` by default — also `proxy`, `broadsea`, or `none`), so you never pass
+`-f` by hand. See what it would run with `COMET_DEBUG=1 comet ps`.
+
+> Prefer a plain alias? This is equivalent, but must be redefined every login:
+>
+> ```bash
+> alias comet='docker compose -f docker/production/compose.yaml -f docker/production/compose.caddy.yaml --env-file .env.production'
+> ```
 
 ---
 
