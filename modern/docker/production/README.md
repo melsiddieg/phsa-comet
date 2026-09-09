@@ -680,6 +680,84 @@ git status --short   # no .env.production, no secrets/, no dumps
 
 ---
 
+## Building on a restricted network
+
+`docker pull` and `docker build` take **different** network paths. The daemon
+pulls images (and honours its own proxy config), but build containers get a
+plain container network and do **not** inherit the daemon's proxy settings. On
+a locked-down corporate or health-authority network the base images therefore
+pull fine while the build dies at:
+
+```
+RUN apk add --no-cache icu-dev libzip-dev postgresql-dev linux-headers git unzip
+... did not complete successfully: exit code: 6
+```
+
+apk's exit code is the number of packages it could not resolve — **6 of 6**,
+i.e. it reached no repository at all.
+
+**Confirm it in one command:**
+
+```bash
+docker run --rm alpine:3 sh -c 'apk update && echo NETWORK-OK'
+```
+
+If that prints `NETWORK-OK`, the network is fine and the failure was
+transient — just rebuild. If it warns about `dl-cdn.alpinelinux.org`, pick a
+fix below.
+
+### Fix 1 — forward your proxy into the build
+
+`compose.yaml` already passes `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`
+through as build args. Export them and rebuild:
+
+```bash
+export HTTPS_PROXY=http://proxy.internal:3128
+export HTTP_PROXY=http://proxy.internal:3128
+export NO_PROXY=localhost,127.0.0.1
+comet build
+```
+
+Find the daemon's existing proxy, if any:
+
+```bash
+systemctl show docker --property=Environment
+cat /etc/systemd/system/docker.service.d/*.conf 2>/dev/null
+```
+
+### Fix 2 — fix DNS for containers
+
+If the failure is DNS rather than a proxy, give the daemon resolvers that work:
+
+```bash
+echo '{ "dns": ["10.0.0.10", "1.1.1.1"] }' | sudo tee /etc/docker/daemon.json
+sudo systemctl restart docker
+```
+
+### Fix 3 — do not build on the server at all
+
+The most robust option when egress is locked down: build the image somewhere
+with open internet (a laptop, or the GitHub Actions workflow in
+`.github/workflows/`), push it to a registry the server *can* reach, and point
+`COMET_IMAGE` at it. No `apk` ever runs on the server.
+
+```bash
+# where the internet works — note the platform must match the server
+docker build --platform linux/amd64 -f docker/production/Dockerfile \
+  -t ghcr.io/melsiddieg/comet:1.0.0 .
+docker push ghcr.io/melsiddieg/comet:1.0.0
+```
+
+```bash
+# .env.production on the server
+COMET_IMAGE=ghcr.io/melsiddieg/comet:1.0.0
+```
+
+Then `comet up -d` pulls that image instead of building — the `build:` section
+is simply not used when the tag already exists locally or in the registry.
+
+---
+
 ## Alternative environments
 
 The deployment above assumes a **dedicated server with nothing else on ports
@@ -911,6 +989,7 @@ docker compose -f docker/production/compose.yaml \
 | Jobs queue but never run | worker down | `comet ps queue`, `comet logs queue` |
 | Disk full during vocab load | Athena data is large | free space or move the Docker data root |
 | `docker compose` → "is not a docker command" | Compose v2 plugin missing (common on 20.04) | install `docker-compose-plugin`; v1 `docker-compose` will not work |
+| Build fails: `apk add ... exit code: 6` | the build container cannot reach `dl-cdn.alpinelinux.org` — apk's exit code is the **number of packages it could not resolve** (6 = all of them) | see [Building on a restricted network](#building-on-a-restricted-network) |
 | `permission denied ... docker.sock` | user not in the `docker` group | `sudo usermod -aG docker $USER`, then log out and back in |
 | Caddy: "no acme server" / challenge fails | DNS not pointing at the VM, or 80/443 blocked | `dig +short $COMET_DOMAIN`; open 80 **and** 443 |
 | `port is already allocated` on 80/443 | something else owns the port | do not use the Caddy overlay — see [Alternative environments](#alternative-environments) |

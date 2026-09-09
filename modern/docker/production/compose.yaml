@@ -13,6 +13,14 @@ x-app-image: &app-image
   build:
     context: ../..
     dockerfile: docker/production/Dockerfile
+    args:
+      # Build containers do NOT inherit the Docker daemon's proxy settings, so
+      # on a restricted network `docker pull` succeeds while `apk add` inside
+      # the build fails to reach dl-cdn.alpinelinux.org. Export these before
+      # building and they are forwarded through. Harmless when empty.
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
   image: ${COMET_IMAGE:-comet:latest}
 
 # Every PHP container gets the same configuration.
