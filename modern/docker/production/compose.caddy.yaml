@@ -21,8 +21,12 @@ services:
     environment:
       COMET_DOMAIN: ${COMET_DOMAIN:?COMET_DOMAIN is required for TLS}
       ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required for TLS}
+      # Empty = obtain a certificate via ACME. Set when ACME is blocked; see
+      # certs/README.md.
+      COMET_TLS: ${COMET_TLS:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/etc/caddy/certs:ro   # optional tls.crt / tls.key
       - caddy_data:/data      # certificates — MUST persist or you will hit rate limits
       - caddy_config:/config
     depends_on:

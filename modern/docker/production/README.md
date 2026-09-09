@@ -460,6 +460,43 @@ curl -I https://comet.example.org/up      # expect 200
 ```
 
 
+### When ACME is blocked
+
+On restricted networks Caddy cannot reach the certificate authorities:
+
+```
+tls.obtain  could not get certificate from issuer
+  ... acme.zerossl.com ...: read: connection reset by peer
+  ... acme-v02.api.letsencrypt.org ...: read: connection reset by peer
+```
+
+Caddy keeps retrying for 30 days, so the site stays on HTTP meanwhile. Supply
+a certificate from your own PKI instead:
+
+1. Put the full chain and key in `docker/production/certs/` as `tls.crt` and
+   `tls.key` (see [`certs/README.md`](certs/README.md)).
+2. Set in `.env.production`:
+
+   ```bash
+   COMET_TLS=tls /etc/caddy/certs/tls.crt /etc/caddy/certs/tls.key
+   ```
+
+3. `comet up -d`
+
+Check the certificate matches `COMET_DOMAIN` and has not expired:
+
+```bash
+openssl x509 -in docker/production/certs/tls.crt -noout -subject -dates
+```
+
+For internal testing only, `COMET_TLS=tls internal` makes Caddy issue its own
+certificate. Browsers warn on every visit, so do not use it for real users.
+
+> **Check `COMET_DOMAIN` first.** If Caddy logs a certificate error for
+> `comet.example.org`, the template placeholder was never replaced.
+
+---
+
 ## Run at boot (systemd)
 
 Services carry `restart: unless-stopped`, so **Docker already restarts them
@@ -1093,6 +1130,8 @@ docker compose -f docker/production/compose.yaml \
 | Traefik 404s on the COMET hostname | DNS/host header not matching `COMET_DOMAIN` | `curl -H 'Host: comet.example.org' http://<vm-ip>/up` to test past DNS |
 | COMET loads but buttons/tables do nothing | served under a **path prefix** — Livewire posts to `/livewire/update` at the root | use a dedicated hostname, not `/comet` |
 | Caddy loops re-issuing certificates | `caddy_data` volume was deleted | restore/keep the volume; Let's Encrypt rate-limits duplicates |
+| Caddy: ACME `connection reset by peer` | network blocks the certificate authorities | supply your own cert — see [When ACME is blocked](#when-acme-is-blocked) |
+| Caddy requests a cert for `comet.example.org` | `COMET_DOMAIN` still the template placeholder | set it to your real hostname |
 | Site loads over HTTP but links say `http://` | `APP_URL` still `http://`, or proxy not sending `X-Forwarded-Proto` | fix `APP_URL`, then `comet up -d` |
 | `systemctl status comet` fails after reboot | wrong `WorkingDirectory` in the unit | edit `/etc/systemd/system/comet.service`, `daemon-reload` |
 

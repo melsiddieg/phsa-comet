@@ -5,6 +5,14 @@
 }
 
 {$COMET_DOMAIN} {
+	# Empty by default -> Caddy obtains a certificate via ACME.
+	# Set COMET_TLS in .env.production when ACME is unreachable:
+	#   tls /etc/caddy/certs/tls.crt /etc/caddy/certs/tls.key
+	#   tls internal        (self-signed; browsers warn)
+	# Caddyfile env placeholders are substituted as raw text, so an empty
+	# value simply removes the directive.
+	{$COMET_TLS}
+
 	encode gzip
 
 	# Match nginx's client_max_body_size inside the app container.

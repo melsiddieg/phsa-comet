@@ -1,0 +1,4 @@
+# TLS keys and certificates are environment-specific and secret.
+*
+!.gitignore
+!README.md
