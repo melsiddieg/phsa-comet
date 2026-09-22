@@ -30,19 +30,18 @@ available.
 
 ## Getting a certificate
 
-Request one from your organisation's PKI / certificate service for the exact
-hostname in `COMET_DOMAIN`. Combine the files if they arrive separately:
+Request one from your organisation's PKI for the exact hostname in
+`COMET_DOMAIN`. The full procedure — converting a Windows `.pfx`, checking
+the hostname, dates, chain and key match — is in the deployment README under
+**"When ACME is blocked: use your own certificate"**.
+
+Quick version for separate files:
 
 ```bash
-cat server.crt intermediate.crt > docker/production/certs/tls.crt
-cp server.key docker/production/certs/tls.key
-chmod 600 docker/production/certs/tls.key
-```
-
-Check the file matches the hostname and is not expired:
-
-```bash
-openssl x509 -in docker/production/certs/tls.crt -noout -subject -dates
+cat server.crt intermediate.crt > tls.crt     # server cert FIRST
+cp server.key tls.key && chmod 600 tls.key
+[ "$(openssl x509 -in tls.crt -noout -pubkey)" = "$(openssl pkey -in tls.key -pubout)" ] \
+  && echo "key matches certificate" || echo "KEY DOES NOT MATCH"
 ```
 
 ## Temporary alternative

@@ -444,16 +444,13 @@ docker compose -f docker/production/compose.yaml \
 > re-issuing repeatedly hits Let's Encrypt rate limits (5 duplicate
 > certificates per week).
 
-Because the overlay is a second `-f`, every later command needs both files.
-Fold that into the alias:
+The `comet` wrapper includes this overlay automatically while
+`COMET_OVERLAY=caddy` (the default), so later commands need no extra `-f`.
 
-```bash
-alias comet='docker compose -f docker/production/compose.yaml -f docker/production/compose.caddy.yaml --env-file .env.production'
-```
-
-**4. Verify end to end.** The container's nginx already honours
-`X-Forwarded-*`, so Laravel emits correct `https://` links once Caddy sets
-them:
+**4. Verify end to end.** Caddy talks to the app over plain HTTP inside the
+Docker network and passes the original scheme in `X-Forwarded-Proto`. The app
+trusts that header (`trustProxies` in `bootstrap/app.php`), so it builds
+`https://` links and marks the session cookie `Secure`:
 
 ```bash
 curl -I https://comet.example.org/up      # expect 200
@@ -505,7 +502,7 @@ AUTH_LOCAL_LOGIN=0                    # once Entra SSO works
 
 ---
 
-### When ACME is blocked
+### When ACME is blocked: use your own certificate
 
 On restricted networks Caddy cannot reach the certificate authorities:
 
@@ -515,24 +512,83 @@ tls.obtain  could not get certificate from issuer
   ... acme-v02.api.letsencrypt.org ...: read: connection reset by peer
 ```
 
-Caddy keeps retrying for 30 days, so the site stays on HTTP meanwhile. Supply
-a certificate from your own PKI instead:
+Caddy keeps retrying for 30 days and the site stays on HTTP. Use a certificate
+from your organisation's PKI instead. The steps below use `comet.phsa.ca`.
 
-1. Put the full chain and key in `docker/production/certs/` as `tls.crt` and
-   `tls.key` (see [`certs/README.md`](certs/README.md)).
-2. Set in `.env.production`:
+**1. Get the files into PEM format.** Caddy needs two files in
+`docker/production/certs/`:
 
-   ```bash
-   COMET_TLS=tls /etc/caddy/certs/tls.crt /etc/caddy/certs/tls.key
-   ```
+| File | Contents |
+|---|---|
+| `tls.crt` | server certificate **first**, then the intermediate(s) |
+| `tls.key` | private key, unencrypted |
 
-3. `comet up -d`
-
-Check the certificate matches `COMET_DOMAIN` and has not expired:
+If you received a Windows `.pfx` / `.p12` bundle, convert it:
 
 ```bash
-openssl x509 -in docker/production/certs/tls.crt -noout -subject -dates
+cd /opt/comet/modern/docker/production/certs
+openssl pkcs12 -legacy -in comet.pfx -clcerts -nokeys | openssl x509 -out server.crt
+openssl pkcs12 -legacy -in comet.pfx -cacerts -nokeys | sed -n '/BEGIN/,/END/p' > chain.crt
+openssl pkcs12 -legacy -in comet.pfx -nocerts -nodes | openssl pkey -out tls.key
+cat server.crt chain.crt > tls.crt
+chmod 600 tls.key
 ```
+
+Each command asks for the `.pfx` password. `-legacy` is needed on OpenSSL 3
+for most Windows exports; without it you get
+`unsupported ... RC2-40-CBC`. On OpenSSL 1.1 (Ubuntu 20.04) drop `-legacy`.
+
+If you received separate files instead:
+
+```bash
+cat comet.phsa.ca.crt intermediate.crt > tls.crt
+cp comet.phsa.ca.key tls.key && chmod 600 tls.key
+```
+
+**2. Check the files before using them:**
+
+```bash
+openssl x509 -in tls.crt -noout -ext subjectAltName   # must list comet.phsa.ca
+openssl x509 -in tls.crt -noout -dates                # notAfter in the future
+openssl x509 -in tls.crt -noout -subject              # the SERVER cert, not the CA
+grep -c 'BEGIN CERTIFICATE' tls.crt                   # 2 or more = chain included
+[ "$(openssl x509 -in tls.crt -noout -pubkey)" = "$(openssl pkey -in tls.key -pubout)" ] \
+  && echo "key matches certificate" || echo "KEY DOES NOT MATCH"
+```
+
+A missing intermediate still works in some browsers but fails in others and in
+`curl`, so do not skip the chain count.
+
+**3. Configure** `.env.production`:
+
+```bash
+COMET_OVERLAY=caddy
+COMET_DOMAIN=comet.phsa.ca
+APP_URL=https://comet.phsa.ca
+HTTP_PORT=127.0.0.1:8080
+COMET_TLS=tls /etc/caddy/certs/tls.crt /etc/caddy/certs/tls.key
+ACME_EMAIL=ops@phsa.ca        # still required by compose; not used with your own cert
+```
+
+**4. Rebuild and restart:**
+
+```bash
+comet build
+comet up -d
+comet ps                      # app/queue healthy, caddy running
+```
+
+**5. Verify from another machine:**
+
+```bash
+curl -sI https://comet.phsa.ca/up | head -1          # HTTP/2 200
+curl -sI http://comet.phsa.ca/ | grep -i location    # 308 to https://
+openssl s_client -connect comet.phsa.ca:443 -servername comet.phsa.ca </dev/null 2>/dev/null \
+  | grep -E 'subject=|issuer=|Verify return code'    # your cert, return code 0
+```
+
+`Verify return code` other than `0` usually means the chain is incomplete, or
+the machine you test from does not trust your organisation's root CA.
 
 For internal testing only, `COMET_TLS=tls internal` makes Caddy issue its own
 certificate. Browsers warn on every visit, so do not use it for real users.
@@ -1175,10 +1231,12 @@ docker compose -f docker/production/compose.yaml \
 | Traefik 404s on the COMET hostname | DNS/host header not matching `COMET_DOMAIN` | `curl -H 'Host: comet.example.org' http://<vm-ip>/up` to test past DNS |
 | COMET loads but buttons/tables do nothing | served under a **path prefix** — Livewire posts to `/livewire/update` at the root | use a dedicated hostname, not `/comet` |
 | Caddy loops re-issuing certificates | `caddy_data` volume was deleted | restore/keep the volume; Let's Encrypt rate-limits duplicates |
-| Caddy: ACME `connection reset by peer` | network blocks the certificate authorities | supply your own cert — see [When ACME is blocked](#when-acme-is-blocked) |
+| Caddy: ACME `connection reset by peer` | network blocks the certificate authorities | supply your own cert — see [When ACME is blocked](#when-acme-is-blocked-use-your-own-certificate) |
 | Caddy requests a cert for `comet.example.org` | `COMET_DOMAIN` still the template placeholder | set it to your real hostname |
 | Login page 404s on submit | `AUTH_LOCAL_LOGIN=0` disables break-glass login | set it to `1` until SSO works |
 | Redirects drop the port (`http://host/` instead of `http://host:8080/`) | fixed — nginx now passes `$http_host` | rebuild the image if you predate this fix |
+| Behind Caddy, links and redirects use `http://` | image predates `trustProxies` | `comet build && comet up -d`; check `comet exec app grep -c trustProxies bootstrap/app.php` prints `1` |
+| `openssl pkcs12 ... unsupported ... RC2-40-CBC` | old Windows `.pfx` on OpenSSL 3 | add `-legacy` |
 | Site loads over HTTP but links say `http://` | `APP_URL` still `http://`, or proxy not sending `X-Forwarded-Proto` | fix `APP_URL`, then `comet up -d` |
 | `systemctl status comet` fails after reboot | wrong `WorkingDirectory` in the unit | edit `/etc/systemd/system/comet.service`, `daemon-reload` |
 
