@@ -11,11 +11,30 @@ class AuthTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_login_page_renders_with_microsoft_button(): void
+    public function test_login_page_renders_with_microsoft_button_when_entra_configured(): void
     {
+        config(['services.azure.client_id' => 'test-client-id']);
+
         $this->get('/login')
             ->assertOk()
             ->assertSee('Sign in with Microsoft');
+    }
+
+    public function test_microsoft_button_hidden_when_entra_not_configured(): void
+    {
+        config(['services.azure.client_id' => null, 'services.comet.local_login' => true]);
+
+        $this->get('/login')
+            ->assertOk()
+            ->assertDontSee('Sign in with Microsoft')
+            ->assertSee('name="password"', false);
+    }
+
+    public function test_login_page_explains_when_no_sign_in_method_is_configured(): void
+    {
+        config(['services.azure.client_id' => null, 'services.comet.local_login' => false]);
+
+        $this->get('/login')->assertOk()->assertSee('Sign-in is not configured');
     }
 
     public function test_home_requires_authentication(): void

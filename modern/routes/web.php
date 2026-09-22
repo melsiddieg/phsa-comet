@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AccountPasswordController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ExportController;
 use App\Http\Controllers\SheetController;
@@ -27,6 +28,9 @@ Route::post('/logout', [AuthController::class, 'logout'])
 // ── App ─────────────────────────────────────────────────────────────
 Route::middleware('auth')->group(function () {
     Route::view('/', 'home')->name('home');
+
+    Route::get('/account/password', [AccountPasswordController::class, 'edit'])->name('account.password');
+    Route::put('/account/password', [AccountPasswordController::class, 'update'])->name('account.password.update');
 
     Route::get('/sheets', [SheetController::class, 'sourceIndex'])->name('sheets.index');
     Route::get('/domains', [SheetController::class, 'domainIndex'])->name('domains.index');

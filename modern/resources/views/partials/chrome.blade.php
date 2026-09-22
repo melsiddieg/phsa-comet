@@ -11,9 +11,14 @@
             <a href="{{ route('export.stcm') }}">Export</a>
             @can('admin')<a href="{{ route('admin.releases') }}">Releases</a><a href="{{ route('admin.users') }}">Users</a>@endcan
         </nav>
-        <form method="POST" action="{{ route('logout') }}">
-            @csrf
-            <button type="submit">Sign out {{ auth()->user()->name }}</button>
-        </form>
+        <div class="account">
+            @if (auth()->user()->isLocal())
+                <a href="{{ route('account.password') }}">Change password</a>
+            @endif
+            <form method="POST" action="{{ route('logout') }}">
+                @csrf
+                <button type="submit">Sign out {{ auth()->user()->name }}</button>
+            </form>
+        </div>
     @endauth
 </header>

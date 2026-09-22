@@ -62,6 +62,7 @@ podman exec comet_modern_app php artisan db:seed --force   # break-glass admin
 
 # 4. Log in at http://localhost:8081
 #    Local sign-in (break-glass):  admin@comet.local  /  change-me-now
+#    (COMET asks for a new password at first sign-in; see modern/docs/local-accounts.md)
 ```
 
 At this point the app runs but has **no source terms and only the dev vocab

@@ -15,6 +15,7 @@ versioning, custom 2-billion concepts).
   Docker Compose, TLS, backups, upgrades. Start there for anything production-bound.
 - **Local dev / resuming on a new machine → [`../RESUME.md`](../RESUME.md).**
 - Vocabulary loading & Canadian extensions → [`docs/vocab-refresh.md`](docs/vocab-refresh.md)
+- Signing in, local team accounts, changing passwords → [`docs/local-accounts.md`](docs/local-accounts.md)
 - Mapper workflow → [`docs/mapper-guide.md`](docs/mapper-guide.md)
 - Reviewer workflow → [`docs/reviewer-guide.md`](docs/reviewer-guide.md)
 - Deploying to Azure instead → [`docs/azure-deploy.md`](docs/azure-deploy.md)

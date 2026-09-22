@@ -32,6 +32,7 @@ side by side during transition.
 | Set up locally / resume on a new machine | [`RESUME.md`](RESUME.md) |
 | Understand the app | [`modern/README.md`](modern/README.md) |
 | Load an OMOP vocabulary | [`modern/docs/vocab-refresh.md`](modern/docs/vocab-refresh.md) |
+| Sign in, add team accounts, change passwords | [`modern/docs/local-accounts.md`](modern/docs/local-accounts.md) |
 | Map terms (day-to-day) | [`modern/docs/mapper-guide.md`](modern/docs/mapper-guide.md) |
 | Review submitted maps | [`modern/docs/reviewer-guide.md`](modern/docs/reviewer-guide.md) |
 | Read the background theory | [`modern/docs/COMET-chapter.pdf`](modern/docs/COMET-chapter.pdf) |

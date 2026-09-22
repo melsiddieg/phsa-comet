@@ -4,24 +4,30 @@ namespace Database\Seeders;
 
 use App\Models\User;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\Hash;
 
 class DatabaseSeeder extends Seeder
 {
     /**
      * Seed the break-glass local administrator.
      *
-     * Password comes from BREAK_GLASS_PASSWORD (falls back to a dev default —
-     * change it before anything production-bound). The account only works when
-     * AUTH_LOCAL_LOGIN=1.
+     * Creates the account only if it does not exist. Running the seeder again
+     * never touches an existing admin, so it cannot reset a password that was
+     * already changed.
+     *
+     * The initial password comes from BREAK_GLASS_PASSWORD, or falls back to
+     * "change-me-now". With the fallback, the admin must choose a new password
+     * at first sign-in. The account only works when AUTH_LOCAL_LOGIN=1.
      */
     public function run(): void
     {
-        User::updateOrCreate(
+        $password = env('BREAK_GLASS_PASSWORD') ?: null;
+
+        User::firstOrCreate(
             ['email' => 'admin@comet.local'],
             [
                 'name' => 'Break-glass Admin',
-                'password' => Hash::make(env('BREAK_GLASS_PASSWORD', 'change-me-now')),
+                'password' => $password ?? 'change-me-now',   // hashed by the model cast
+                'must_change_password' => $password === null,
                 'auth_source' => 'local',
                 'enabled' => true,
                 'is_mapper' => true,

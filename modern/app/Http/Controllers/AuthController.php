@@ -7,6 +7,8 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 use Laravel\Socialite\Facades\Socialite;
 use Symfony\Component\HttpFoundation\RedirectResponse as SymfonyRedirect;
 
@@ -53,7 +55,10 @@ class AuthController extends Controller
         return redirect()->intended(route('home'));
     }
 
-    /** Break-glass local login - only when AUTH_LOCAL_LOGIN=1 and auth_source='local'. */
+    /**
+     * Local login (break-glass admin and team stop-gap accounts).
+     * Only when AUTH_LOCAL_LOGIN=1 and auth_source='local'.
+     */
     public function loginLocal(Request $request): RedirectResponse
     {
         abort_unless(config('services.comet.local_login'), 404);
@@ -63,18 +68,34 @@ class AuthController extends Controller
             'password' => ['required'],
         ]);
 
+        // 5 attempts per minute per email + IP, so passwords cannot be guessed quickly.
+        $throttleKey = 'local-login:'.Str::lower($credentials['email']).'|'.$request->ip();
+        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+
+            return back()->withErrors(['auth' => "Too many sign-in attempts. Try again in {$seconds} seconds."])
+                ->onlyInput('email');
+        }
+
         $user = User::where('email', $credentials['email'])
             ->where('auth_source', 'local')
             ->where('enabled', true)
             ->first();
 
         if (! $user || ! $user->password || ! Hash::check($credentials['password'], $user->password)) {
+            RateLimiter::hit($throttleKey, 60);
+
             return back()->withErrors(['auth' => 'Invalid credentials.'])->onlyInput('email');
         }
 
+        RateLimiter::clear($throttleKey);
         $user->update(['last_login_at' => now(), 'last_login_ip' => $request->ip()]);
         Auth::login($user);
         $request->session()->regenerate();
+
+        if ($user->must_change_password) {
+            return redirect()->route('account.password');
+        }
 
         return redirect()->intended(route('home'));
     }

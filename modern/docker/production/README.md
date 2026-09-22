@@ -52,7 +52,7 @@ comet up -d
 comet ps                                             # migrate should show exited (0)
 
 # --- 4. first admin ----------------------------------------------------
-comet exec app php artisan db:seed --force           # admin@comet.local / change-me-now
+comet exec app php artisan db:seed --force           # admin@comet.local / change-me-now (must change at first sign-in)
 
 # --- 5. verify ---------------------------------------------------------
 curl -I https://comet.example.org/up                 # expect 200
@@ -62,7 +62,8 @@ sudo cp docker/production/comet.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now comet
 ```
 
-Then change the break-glass password, configure SSO, and work the
+Then sign in and set your own admin password (COMET asks for it), add the team
+as local accounts (see `docs/local-accounts.md`), configure SSO, and work the
 [security checklist](#security-checklist) before loading real data.
 </details>
 
@@ -361,8 +362,13 @@ docker compose -f docker/production/compose.yaml --env-file .env.production \
 ```
 
 This creates the break-glass admin `admin@comet.local` / `change-me-now`.
-**Log in and change that password immediately**, then move to Entra SSO and
-set `AUTH_LOCAL_LOGIN=0`.
+Running the seeder again never changes an existing admin. Sign in with
+`AUTH_LOCAL_LOGIN=1`: COMET makes you choose a new password before anything
+else.
+
+Until Entra SSO is ready, the team uses **local accounts**, which the admin
+creates on the Users screen. Step-by-step instructions for admins and team
+members are in [`../../docs/local-accounts.md`](../../docs/local-accounts.md).
 
 ---
 
@@ -835,7 +841,8 @@ Before handling real patient-derived data:
 - [ ] `secrets/pg_app_pw.txt` is `chmod 600` and not in git
 - [ ] `.env.production` is `chmod 600` and not in git
 - [ ] TLS terminating in front; `HTTP_PORT` bound to `127.0.0.1`
-- [ ] Break-glass password changed from `change-me-now`
+- [ ] Break-glass password changed from `change-me-now` (COMET enforces this at first sign-in)
+- [ ] Local accounts disabled, and `AUTH_LOCAL_LOGIN=0`, once everyone signs in with Entra
 - [ ] Entra SSO configured and `AUTH_LOCAL_LOGIN=0`
 - [ ] Postgres and Redis ports **not** published to the host (they are not, by default)
 - [ ] Nightly backups running, and a restore actually tested
@@ -1254,6 +1261,8 @@ docker compose -f docker/production/compose.yaml \
 | Caddy: ACME `connection reset by peer` | network blocks the certificate authorities | supply your own cert — see [When ACME is blocked](#when-acme-is-blocked-use-your-own-certificate) |
 | Caddy requests a cert for `comet.example.org` | `COMET_DOMAIN` still the template placeholder | set it to your real hostname |
 | Login page 404s on submit | `AUTH_LOCAL_LOGIN=0` disables break-glass login | set it to `1` until SSO works |
+| Buttons and forms do nothing; browser console shows `livewire.min.js` 404 | image predates the nginx fix: the static-file rule answered 404 for Livewire's script | `git pull && comet build && comet up -d` |
+| Forgot the only admin password | — | `comet exec app php artisan comet:reset-password admin@comet.local` prints a temporary one |
 | Redirects drop the port (`http://host/` instead of `http://host:8080/`) | fixed — nginx now passes `$http_host` | rebuild the image if you predate this fix |
 | Behind Caddy, links and redirects use `http://` | image predates `trustProxies` | `comet build && comet up -d`; check `comet exec app grep -c trustProxies bootstrap/app.php` prints `1` |
 | `openssl pkcs12 ... unsupported ... RC2-40-CBC` | old Windows `.pfx` on OpenSSL 3 | add `-legacy` |

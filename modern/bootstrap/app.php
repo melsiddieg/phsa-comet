@@ -19,6 +19,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // on 127.0.0.1 only and is reached through the proxy. X-Forwarded-Host
         // is not trusted: the proxies pass the original Host header through,
         // so it is not needed, and trusting it would allow host spoofing.
+        // Local users with an admin-set password must choose their own first.
+        $middleware->web(append: [\App\Http\Middleware\RequirePasswordChange::class]);
+
         $middleware->trustProxies(
             at: '*',
             headers: Request::HEADER_X_FORWARDED_FOR
