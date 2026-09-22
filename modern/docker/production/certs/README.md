@@ -28,21 +28,25 @@ tls.obtain  could not get certificate from issuer
 Caddy retries for 30 days, so the site stays on HTTP until a certificate is
 available.
 
-## Getting a certificate
+## Getting the files ready
 
-Request one from your organisation's PKI for the exact hostname in
-`COMET_DOMAIN`. The full procedure — converting a Windows `.pfx`, checking
-the hostname, dates, chain and key match — is in the deployment README under
-**"When ACME is blocked: use your own certificate"**.
-
-Quick version for separate files:
+Have a PEM bundle and a key (e.g. `all.pem` + `comet.key`)? Put them here and
+run:
 
 ```bash
-cat server.crt intermediate.crt > tls.crt     # server cert FIRST
-cp server.key tls.key && chmod 600 tls.key
-[ "$(openssl x509 -in tls.crt -noout -pubkey)" = "$(openssl pkey -in tls.key -pubout)" ] \
-  && echo "key matches certificate" || echo "KEY DOES NOT MATCH"
+./prepare.sh all.pem comet.key                 # hostname read from .env.production
+./prepare.sh all.pem comet.key comet.phsa.ca   # or pass it explicitly
 ```
+
+It writes `tls.crt` and `tls.key` after checking that the key matches, the
+certificate covers the hostname, and it has not expired. It also puts the
+certificates in the order Caddy needs (server → intermediate → root) and
+removes the key passphrase, since Caddy cannot read an encrypted key. If any
+check fails, it writes nothing. For non-interactive use, pass the passphrase
+as `KEY_PASS=...`.
+
+Other formats (Windows `.pfx`, separate files): see the deployment README,
+section **"When ACME is blocked: use your own certificate"**.
 
 ## Temporary alternative
 

@@ -515,8 +515,28 @@ tls.obtain  could not get certificate from issuer
 Caddy keeps retrying for 30 days and the site stays on HTTP. Use a certificate
 from your organisation's PKI instead. The steps below use `comet.phsa.ca`.
 
-**1. Get the files into PEM format.** Caddy needs two files in
-`docker/production/certs/`:
+**1. Prepare the files.** If you have a PEM bundle and a key (for example
+`all.pem` and `comet.key`), copy both into `docker/production/certs/` and run
+the helper:
+
+```bash
+cd /opt/comet/modern/docker/production/certs
+./prepare.sh all.pem comet.key
+```
+
+It writes `tls.crt` and `tls.key`, and it:
+
+- asks for the key passphrase if there is one, and writes the key unencrypted
+  (Caddy cannot read an encrypted key)
+- puts the certificates in the order Caddy needs — server → intermediate →
+  root — whatever order they are in `all.pem`
+- checks that the key matches, the certificate covers `COMET_DOMAIN`, and it
+  has not expired
+- writes nothing if any check fails
+
+Then skip to step 3. The manual steps below are for other formats.
+
+Caddy needs two files in `docker/production/certs/`:
 
 | File | Contents |
 |---|---|
