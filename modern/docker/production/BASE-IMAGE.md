@@ -1,7 +1,7 @@
 # Base image: Debian vs Alpine
 
 This branch (`try/debian-base`) swaps the production image from Alpine to
-**Debian bookworm** (`php:8.4-cli` / `php:8.4-fpm`). Behaviour is identical;
+**Debian trixie** (`php:8.4.27-cli-trixie` / `php:8.4.27-fpm-trixie`, pinned via `ARG PHP_VERSION`). Behaviour is identical;
 the only reason is **package-mirror reachability**.
 
 ## Why
@@ -71,7 +71,7 @@ guaranteed on any base:
 
 | | Alpine | Debian |
 |---|---|---|
-| Base | `php:8.4-*-alpine` | `php:8.4-cli` / `php:8.4-fpm` |
+| Base | `php:8.4-*-alpine` | `php:8.4.27-cli-trixie` / `php:8.4.27-fpm-trixie` |
 | Packages | `apk` → `dl-cdn.alpinelinux.org` | `apt` → `deb.debian.org` |
 | `icu-dev` etc. | `icu-dev libzip-dev postgresql-dev` | `libicu-dev libzip-dev libpq-dev` |
 | Corporate CA | append to bundle + `SSL_CERT_FILE` (apk-tools 3 quirk) | `update-ca-certificates` (standard) |

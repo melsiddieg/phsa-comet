@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # ---------------------------------------------------------------------------
-# COMET production image — Debian (bookworm) variant.
+# COMET production image — Debian (trixie) variant.
 #
 # Identical to the Alpine image in behaviour; the only reason this exists is
 # package-mirror reachability. Networks that block dl-cdn.alpinelinux.org
@@ -20,8 +20,13 @@
 # Unlike the dev compose stack, code is BAKED IN — no bind mounts.
 # ---------------------------------------------------------------------------
 
+# PHP is pinned to an exact patch release so a cached `php:8.4-*` image can
+# never be reused by mistake. 8.4.27 fixes PHP2Shell (CVE-2026-109618,
+# CVE-2026-109619). Bump this on every PHP security release.
+ARG PHP_VERSION=8.4.27
+
 # ---- Stage 1: vendor/ via composer (no dev deps) --------------------------
-FROM php:8.4-cli AS vendor
+FROM php:${PHP_VERSION}-cli-trixie AS vendor
 
 # Optional corporate CA, for networks doing TLS inspection. Empty by default.
 # On Debian this is the standard flow: drop certs in, run update-ca-certificates.
@@ -54,7 +59,7 @@ RUN mkdir -p bootstrap/cache storage/framework/cache/data storage/framework/sess
  && composer dump-autoload --optimize --no-dev --classmap-authoritative
 
 # ---- Stage 2: runtime ------------------------------------------------------
-FROM php:8.4-fpm
+FROM php:${PHP_VERSION}-fpm-trixie
 
 COPY docker/production/ca-certs/ /usr/local/share/ca-certificates/
 RUN set -eux; \
