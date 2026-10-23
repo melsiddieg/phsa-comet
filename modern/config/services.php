@@ -38,7 +38,9 @@ return [
     'azure' => [
         'client_id' => env('ENTRA_CLIENT_ID'),
         'client_secret' => env('ENTRA_CLIENT_SECRET'),
-        'redirect' => env('ENTRA_REDIRECT_URI'),
+        // Defaults to APP_URL/auth/callback (also when set but empty);
+        // must match the redirect URI in the Entra app registration exactly.
+        'redirect' => env('ENTRA_REDIRECT_URI') ?: rtrim((string) env('APP_URL'), '/').'/auth/callback',
         'tenant' => env('ENTRA_TENANT_ID'),
     ],
 

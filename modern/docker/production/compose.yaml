@@ -53,6 +53,7 @@ x-app-env: &app-env
   ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
   ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET:-}
   ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
+  ENTRA_REDIRECT_URI: ${ENTRA_REDIRECT_URI:-}   # empty = APP_URL/auth/callback
 
 x-app-common: &app-common
   restart: unless-stopped
