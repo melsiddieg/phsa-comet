@@ -11,8 +11,13 @@
 # Unlike the dev compose stack, code is BAKED IN — no bind mounts.
 # ---------------------------------------------------------------------------
 
+# PHP is pinned to an exact patch release so a cached `php:8.4-*` image can
+# never be reused by mistake. 8.4.27 fixes PHP2Shell (CVE-2026-109618,
+# CVE-2026-109619). Bump this on every PHP security release.
+ARG PHP_VERSION=8.4.27
+
 # ---- Stage 1: vendor/ via composer (no dev deps) --------------------------
-FROM php:8.4-cli-alpine AS vendor
+FROM php:${PHP_VERSION}-cli-alpine AS vendor
 
 # --- Restricted-network support (both are no-ops by default) ----------------
 # 1. Corporate CA: drop .crt files in docker/production/ca-certs/ when the
@@ -55,7 +60,7 @@ RUN mkdir -p bootstrap/cache storage/framework/cache/data storage/framework/sess
  && composer dump-autoload --optimize --no-dev --classmap-authoritative
 
 # ---- Stage 2: runtime ------------------------------------------------------
-FROM php:8.4-fpm-alpine
+FROM php:${PHP_VERSION}-fpm-alpine
 
 # --- Restricted-network support (both are no-ops by default) ----------------
 # 1. Corporate CA: drop .crt files in docker/production/ca-certs/ when the

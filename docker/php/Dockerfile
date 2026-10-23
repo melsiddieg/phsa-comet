@@ -1,4 +1,4 @@
-FROM php:8.2-fpm-alpine
+FROM php:8.2.35-fpm-alpine
 ENV TAR_OPTIONS="--no-same-owner --no-same-permissions --no-overwrite-dir"
 # 1) Install runtime & build-time deps (icu-dev includes icu-libs, icu-data-full & pkgconfig)
 RUN apk add --no-cache icu-dev
